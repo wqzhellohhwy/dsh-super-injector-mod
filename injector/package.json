@@ -1,7 +1,7 @@
 {
-  "name": "@dsh-external/dsh-super-injector",
-  "version": "0.3.3",
-  "description": "超级模组注入器：运行时注入任意本地 DSH 插件包（junction 链接 + loader.create，不碰 patch/package.json/不重启），热重载全家桶 + 开发侧挂区一键转正 + 一键卸载 + 路由自愈 + 插件管理 UI（设置页：列表/卸载/拖入内化），清单持久化重启自动恢复——DSH 生态的 BepInEx 式模组注入入口",
+  "name": "@dsh-external/dsh-super-injector-mod",
+  "version": "0.3.3-mod.1",
+  "description": "超级模组注入器（自用修改版，基于上游 yjh051108/dsh-super-injector v0.3.3）：运行时注入任意本地 DSH 插件包（junction 链接 + loader.create，不碰 patch/package.json/不重启），热重载全家桶 + 开发侧挂区一键转正 + 一键卸载 + 路由自愈 + 插件管理 UI（设置页：列表/卸载/拖入内化），清单持久化重启自动恢复——DSH 生态的 BepInEx 式模组注入入口。本修改版新增：client 插件重载后模块图重组广播（根治 slot 错位界面报废）、dev_reload_package 自伤护栏 + force 逃生门、等待纪律（阻塞等待 ≤30s）。",
   "private": true,
   "type": "module",
   "main": "./lib/index.js",

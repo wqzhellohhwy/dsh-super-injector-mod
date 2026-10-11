@@ -1,4 +1,23 @@
-# dsh-super-injector — 超级模组注入器
+# dsh-super-injector-mod — 超级模组注入器（自用修改版）
+
+> ## ⚠️ 本仓库是自用修改版（fork / mod）
+>
+> **基线**：上游 [yjh051108/dsh-super-injector](https://github.com/yjh051108/dsh-super-injector) **v0.3.3**
+> **包名**：`@dsh-external/dsh-super-injector-mod`（与上游 `@dsh-external/dsh-super-injector` **可并存**，不互相覆盖）
+> **版本**：`0.3.3-mod.1`
+>
+> 本修改版相对上游的改动：
+>
+> | 改动 | 说明 |
+> |---|---|
+> | **client 插件重载后模块图重组广播** | 上游重载带 client 的插件时只通知 bundle rev 变化（`rebuilt`），**假定渲染端能自愈**。实测会因 DSH 客户端「整包 bundle + slot 注册表」无模块级边界而导致模块图与 slot 注册错位（`renderSlot is not a function`），界面报废且只能重启恢复。本版在重载后调 `compose()` + `notifyGraphChanged()` **主动重组并广播模块图**，并确保目标行在表内（`processOne` 补注册） |
+> | **`dev_reload_package` 自伤护栏 + `force` 逃生门** | 重载关键基础设施（注入器自身 / `dsh-tool-manager`）前默认**拦截**并说明风险与替代路径；确需重载时传 `force: true` 放行。防止「重载过程中工具表被摘除重建、正在运行的会话失去工具而无法自救」 |
+> | **等待纪律（写入注入上下文）** | 明确约定 `job_output` / `wait_agent` 等阻塞等待**单次上限 30000ms**。分钟级等待（如 180s）会把「宿主已损坏」的窗口拉到极致，表现为「人还活着但没人应答」直到被强杀——即用户感知的「莫名暴毙」 |
+> | **改名后的自识别兼容** | `matchesSelf` 改为 `isSelfName`：按「去 `@scope/` 前缀后是否为自身名」判定，兼容 `dsh-super-injector` / `dsh-super-injector-mod` / 裸短名。原实现用 `includes('dsh-super-injector')`，改名后**短名会绕过防自毁检查**（实测捕获） |
+> | **构建方式** | 本机以 **esbuild** 重建产物（上游走 tsdown）。形态逐项对齐：ESM + 自包含（除 `node:` 外全部内联）、`minify: false`、`charset: utf8`（保留中文原文，避免被转义为 `\uXXXX`） |
+>
+> **上游内容原样保留在下方**（安装、用法、设计哲学等章节），仅包名与版本号按本修改版调整。
+> 上游的 peer 依赖、装配机制、防自毁设计**未做改动**。
 
 > ## 🎉 v0.3.0 重大声明（2026-08-14）
 >
@@ -29,21 +48,26 @@ DSH 生态的 **BepInEx 式模组注入入口**：运行时把任意本地插件
 
 ### 方式 A：Release 包（推荐，免构建）
 
-从 [Releases](https://github.com/yjh051108/dsh-super-injector/releases) 下载
-`dsh-external-dsh-super-injector-0.0.1.tgz`，解压得到插件目录（含 `lib/` 与 `cordis.patch.yml`），然后：
+从 [Releases](https://github.com/yjh051108/dsh-super-injector/releases) 下载 tgz（上游版本），
+或直接使用本修改版的本地目录。解压/定位到插件目录（含 `lib/` 与 `cordis.patch.yml`），然后：
 
 ```bash
 # 官方装配（重启后由 bundles 接管，生产态）
-dsh plugin --profile web add <解压目录>
+dsh plugin --profile web add <插件目录>
 
 # 或运行时注入（免重启，开发态；需任一环境已常驻注入器）
-# 对 AI 说：dev_inject_plugin <解压目录>
+# 对 AI 说：dev_inject_plugin <插件目录>
 ```
+
+> **桌面版（desktop profile）注意**：`dsh plugin --profile desktop` 会被 CLI 拒绝
+> （该 profile 由 Electron 独占）。请手动编辑
+> `~/.dsh/profiles/desktop/package.json`：在 `dependencies` 加 `link:` 依赖，
+> 并在 **`dsh.profile.bundles` 里加上包名**（两处都要，缺一装配失败）。
 
 ### 方式 B：git 装配
 
 ```bash
-dsh plugin --profile web add github:yjh051108/dsh-super-injector
+dsh plugin --profile web add github:yjh051108/dsh-super-injector   # 上游
 ```
 
 > git 依赖拉取的是源码仓库（不含 `lib/`）；包内 `prepare` 钩子会在安装时自动
@@ -60,8 +84,8 @@ dsh plugin --profile web add github:yjh051108/dsh-super-injector
 
 ```yaml
 - insert:
-    - id: dsh-super-injector
-      name: '@yjh051108/dsh-super-injector'
+    - id: dsh-super-injector-mod
+      name: '@dsh-external/dsh-super-injector-mod'
       config: {}
 ```
 
@@ -257,5 +281,8 @@ minimal 99/96 vs standard 91 vs 两阶段 98/99、触发机制微探针、轨迹
 
 ---
 
-**仓库**：https://github.com/yjh051108/dsh-super-injector
-**Release**：https://github.com/yjh051108/dsh-super-injector/releases
+**上游仓库**：https://github.com/yjh051108/dsh-super-injector
+**上游 Release**：https://github.com/yjh051108/dsh-super-injector/releases
+
+> 本仓库为**自用修改版**（`@dsh-external/dsh-super-injector-mod`），基线 v0.3.3。
+> 改动清单见文首说明；上游的设计哲学、装配机制与防自毁逻辑均予保留。

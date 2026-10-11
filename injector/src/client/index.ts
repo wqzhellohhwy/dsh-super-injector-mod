@@ -1,5 +1,5 @@
 /**
- * dsh-super-injector 插件管理 UI（settings.section 页面）。
+ * dsh-super-injector-mod 插件管理 UI（settings.section 页面）。
  * 功能：已注入插件列表 + 一键卸载 + 添加（路径输入/拖放提示）——
  *   - 直接注入：目录已是插件包（package.json + lib/）→ 立即注入
  *   - 内化：任意文件夹 → 新建 agent 会话 → AI 把内容变成插件
@@ -61,10 +61,15 @@ export function apply(ctx: ClientContext): void {
       component: () => ({
         render() {
           const style = document.createElement('style')
+          // data-plugin 归属必须显式写：DSH 的 claimStyles 会把没有该属性的
+          // <style> 认领给「刚物化的另一个插件」，那个插件重载/回收时
+          // （removeOwnedStyles）会把这里的样式一起删掉 —— 表现为整页 UI
+          // 变成没有 CSS 的裸控件。归属键 = 本包名（Loader 条目 id）。
+          style.setAttribute('data-plugin', '@dsh-external/dsh-super-injector-mod')
           style.textContent = styles
 
           const page = el('div', 'spi-page')
-          const h = el('h3', undefined, '插件管理（dsh-super-injector）')
+          const h = el('h3', undefined, '插件管理（dsh-super-injector-mod）')
           const stats = el('p', 'spi-stats')
           page.append(style, h, stats)
 
