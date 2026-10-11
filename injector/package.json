@@ -51,6 +51,8 @@
     "build": "bash scripts/build.sh",
     "prepare": "node scripts/prepare.mjs",
     "build:client": "tsdown",
+    "build:esbuild": "node scripts/build-esbuild.mjs",
+    "verify:client": "node scripts/verify-client-load.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   }
 }
