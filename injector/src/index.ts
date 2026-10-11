@@ -2,16 +2,16 @@
  * dsh-super-injector-mod — 超级模组注入器 + 热重载引擎（融合 dsh-bundle-hmr）。
  *
  * DSH 生态的 BepInEx：运行时注入任意本地插件包 + 整包热重载 + 插件状态，
- * 不碰 patch/package.json（注入路径）或改 profile 双路径装配（install 路径）。
+ * 只做运行时注入：不碰 patch / package.json / bundles——装 / 卸 / 开关一律归官方
+ * dsh-plugin-manager，本包只补官方留白的「未配置包怎么挂进运行时」那一格。
  *
  * 能力：
  *  1. dev_inject_plugin     — 运行时注入本地插件包（junction + loader.create，免持久化）
- *  2. dev_install_package   — 双路径热装配（profile package.json + junction + loader.create，重启后由 bundles 接管）
- *  3. dev_reload_package    — 确定性整包热重载（清缓存 → import → registry 重建 fiber，失败回滚）
- *  4. dev_plugin_status     — 已装配插件清单（id/name/fiber 状态/入口）
- *  5. dev_injected_list     — 注入清单（registry.json，重启自动恢复）
- *  6. 自动轮询 watch        — lib 产物指纹变化 → 自动热重载
- *  7. 静态能力提示注入       — 固定文本 + order 靠前（静态到头：工具 schema
+ *  2. dev_reload_package    — 确定性整包热重载（清缓存 → import → registry 重建 fiber，失败回滚）
+ *  3. dev_plugin_status     — 已装配插件清单（id/name/fiber 状态/入口）
+ *  4. dev_injected_list     — 注入清单（registry.json，重启自动恢复）
+ *  5. 自动轮询 watch        — lib 产物指纹变化 → 自动热重载
+ *  6. 静态能力提示注入       — 固定文本 + order 靠前（静态到头：工具 schema
  *     变更时静态段仍缓存命中；动态内容才走尾部/消息尾）
  *
  * 关键机制（全部实测验证）：
@@ -731,54 +731,6 @@ export function apply(ctx: AppContext, config: Config): void {
     } catch { /* 文件不存在等，忽略 */ }
   }
 
-  /**
-   * ═══ 统一 profile patch 写入（F：防 YAML 双顶层值 + 防重复 id——实测踩坑）═══
-   * 官方 patch 初始是顶层 `[]`（空数组）；盲 append `- id:` 会产生两个顶层
-   * YAML 值 → 解析必炸。本函数：移除顶层 `[]` 再追加条目，保证文件始终
-   * 单一顶层值（列表）。
-   *
-   * ═══ 幂等去重（2026-08-15 别人机器 duplicate loader entry id 教训）═══
-   * 手动 patch / 重复安装 / 多路径写入都可能让同 id entry 出现两次——dsh
-   * loader 装配遇同 id 直接抛 `duplicate loader entry id`，整个 plugin tree
-   * 加载失败（启动即崩），且注入器自身无法自愈（鸡生蛋）。因此：
-   *  1. 写入前扫描现有条目 id；若 appendText 的 id 已存在 → 不追加（幂等）；
-   *  2. 对历史重复：重写文件时按 id 去重（保留最后一条，注释块保留）；
-   *  3. heal/self-test 等触碰 patch 的路径全部走这里，杜绝盲 append。
-   * @param appendText - 要追加的条目文本（含换行，如 `- id: xxx\n  disabled: true\n`）
-   * @returns 是否发生了写入
-   */
-  function writePatch(appendText: string): boolean {
-    try {
-      const patchFile = join(dirname(profileNodeModules), 'cordis.patch.yml')
-      mkdirSync(dirname(patchFile), { recursive: true })
-      let content = ''
-      try { content = readFileSync(patchFile, 'utf8') } catch { /* 不存在按空处理 */ }
-      // 1. 收集 appendText 携带的 id（支持单条 `- id: x` 与 `- insert:` 包裹块）
-      const appendIds = [...appendText.matchAll(/^\s*- id:\s*([^\s#]+)/gm)].map((m) => m[1])
-      // 2. 提取现有内容里所有条目块（含注释），按 id 归组
-      const blocks = extractPatchBlocks(content)
-      const existing = new Set<string>()
-      const kept: string[] = []
-      for (const b of blocks) {
-        if (b.id) {
-          // 同 id 重复：只保留最后一条（后续同名覆盖先前的）
-          if (existing.has(b.id)) continue
-          existing.add(b.id)
-        }
-        kept.push(b.text)
-      }
-      // 3. 幂等：appendIds 全部已存在 → 不写入
-      if (appendIds.length > 0 && appendIds.every((id) => existing.has(id))) {
-        return false
-      }
-      // 4. 重写：去重后的现有块 + 追加文本
-      const cleanedTop = kept.join('').replace(/^\s*\[\]\s*$/m, '')
-      writeFileSync(patchFile, cleanedTop + appendText, 'utf8')
-      return true
-    } catch {
-      return false
-    }
-  }
 
   /** 把 patch 内容切分为"条目块"（`- id:` 及其缩进子行 + 前置注释行）。
    * 每块文本保留行尾换行，块间 join 不粘连；顶格注释单独成块（不并入前一条目，
@@ -2117,29 +2069,10 @@ export function apply(ctx: AppContext, config: Config): void {
       }
     }
     if (!steps.some(s => s.startsWith('entry 已卸载'))) steps.push('（无匹配 entry）')
-    // 1.5 阻断 bundle patch 自装配：插件自带 cordis.patch.yml 会 insert 自己，
-    // include.refresh 会把刚卸的 entry 加回（卸载不全的根因）。在 profile patch
-    // 写 disabled 覆盖（loader patch 同 id 的 disabled 优先于 bundle 层 insert）。
-    // ⚠️ 必须解析式追加（实测踩坑）：官方 patch 文件初始是顶层 `[]`（空数组），
-    // 若盲 append `- id:` 会产生**两个顶层 YAML 值** → 解析必炸。正确做法：
-    // 移除顶层 `[]` 空数组后再追加条目，保证文件始终是单一顶层值（列表）。
-    if (fullName && !allowSelf) {
-      const idShort = fullName.split('/').pop()
-      if (idShort) {
-        // ⚠️ 幂等：已存在同名 disabled 条目则跳过（否则重复卸载会累积条目——
-        // 实测踩坑：自检多次卸载累积 6 个 self-test-plugin disabled）
-        const patchFile = join(dirname(profileNodeModules), 'cordis.patch.yml')
-        let already = false
-        try { already = readFileSync(patchFile, 'utf8').includes(`id: ${idShort}`) } catch { /* 文件不存在 */ }
-        if (already) {
-          steps.push('profile patch 已有 disabled（幂等跳过）')
-        } else if (writePatch(`\n# 已卸载插件（${fullName}）：disabled 阻断其 bundle patch 自装配\n- id: ${idShort}\n  disabled: true\n`)) {
-          steps.push('profile patch 已写 disabled（阻断自装配，防 refresh 加回；writePatch 兼容 [] 初始形式）')
-        } else {
-          steps.push('profile patch 写入失败')
-        }
-      }
-    }
+    // ⚠️ 自 0.4.0-mod.1 起不再写 profile patch disabled：本包已不做「装」
+    // （dev_install_package 已删），注入的包不在 profile bundles 里，无需阻断自装配。
+    // 对**手工装进 bundles** 的插件，撤销后其 bundle patch 仍会把它加回——
+    // 那类插件请改用官方 dsh-plugin-manager 卸载。
     // 2. registry 清理（按 name 或目录匹配）
     const reg = readRegistry()
     const hit = reg.find(e => e.name.includes(match) || e.dir.includes(match))
@@ -2566,7 +2499,7 @@ export function apply(ctx: AppContext, config: Config): void {
 
   safeRegister(defineTool({
     name: 'dev_uninject_plugin',
-    description: '超级模组卸载器：卸载已注入的插件包——卸 loader entry（fiber dispose，工具/监听全清理）→ 清注入清单 → 删 profile junction → 另写 profile patch disabled 条目（防 include.refresh 加回），免重启。参数 = 包名子串（如 dsh-toy-supermod）',
+    description: '超级模组卸载器：运行时撤销已注入的插件包——卸 loader entry（fiber dispose，工具/监听全清理）→ 清注入清单 → 删 profile junction → 清 client 模块表，免重启。**不改任何 profile 配置**（0.4.0-mod.1 起不再写 patch disabled；手工装进 bundles 的插件请用官方 dsh-plugin-manager 卸载）',
     parameters: {
       match: { type: 'string', required: true, description: '包名/路径子串（如 dsh-toy-supermod 或 @dsh-external/dsh-toy-supermod）' },
       self: { type: 'boolean', description: '自举卸载（仅对 dsh-super-injector-mod 自身）：卸运行时 entry，保留 registry/junction/bundles 装配链，重启后自动装回' },
@@ -2797,91 +2730,6 @@ export function apply(ctx: AppContext, config: Config): void {
     },
   }))
 
-  safeRegister(defineTool({
-    name: 'dev_install_package',
-    description: '热装配一个本地 bundle 插件：改 profile package.json（dependencies 加 link + bundles 数组加包名）→ 建 node_modules junction → loader.create 动态加载（免重启生效）。幂等：已存在的项自动跳过。重启后由 bundles 列表正常装配（双路径一致）',
-    parameters: {
-      dir: {
-        type: 'string',
-        required: true,
-        description: '插件包目录绝对路径（须含 package.json，且已 build 出 lib/）',
-      },
-      profile: {
-        type: 'string',
-        description: '目标 profile 名（缺省 web）',
-      },
-    },
-    output: {
-      schema: { type: 'string' },
-      render: (_args: unknown, value: unknown) => [{ type: 'text', text: String(value) }],
-    },
-    async execute(args) {
-      return withOpLock(async () => {
-      const dir = String(args.dir)
-      const profileName = args.profile ? String(args.profile) : 'web'
-      try {
-        const pkgPath = join(dir, 'package.json')
-        if (!existsSync(pkgPath)) return 'ERROR: 目录无 package.json: ' + dir
-        const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
-        const name = pkg.name
-        if (typeof name !== 'string' || !name) return 'ERROR: package.json 缺 name'
-
-        const home = process.env.DSH_HOME || join(homedir(), '.dsh')
-        const profileDir = join(home, 'profiles', profileName)
-        const profilePkgPath = join(profileDir, 'package.json')
-        if (!existsSync(profilePkgPath)) return 'ERROR: profile 不存在: ' + profileDir
-        const steps: string[] = []
-
-        // 改 profile package.json（dependencies + bundles，幂等）
-        const raw = readFileSync(profilePkgPath, 'utf8')
-        const profilePkg = JSON.parse(raw)
-        profilePkg.dependencies = profilePkg.dependencies ?? {}
-        profilePkg.dsh = profilePkg.dsh ?? {}
-        profilePkg.dsh.profile = profilePkg.dsh.profile ?? {}
-        profilePkg.dsh.profile.bundles = profilePkg.dsh.profile.bundles ?? []
-        if (profilePkg.dependencies[name]) steps.push('dependencies 已存在（跳过）')
-        else { profilePkg.dependencies[name] = 'link:' + dir; steps.push('dependencies += ' + name) }
-        if (profilePkg.dsh.profile.bundles.includes(name)) steps.push('bundles 已存在（跳过）')
-        else { profilePkg.dsh.profile.bundles.push(name); steps.push('bundles += ' + name) }
-        writeFileSync(profilePkgPath, JSON.stringify(profilePkg, null, 2) + '\n', 'utf8')
-
-        // node_modules junction（@scope/name 两级目录）
-        const scope = name.startsWith('@') ? name.split('/')[0] : null
-        const linkDir = scope ? join(profileDir, 'node_modules', scope) : join(profileDir, 'node_modules')
-        const linkPath = join(linkDir, scope ? name.split('/')[1] as string : name)
-        if (existsSync(linkPath)) steps.push('node_modules link 已存在（跳过）')
-        else {
-          mkdirSync(linkDir, { recursive: true })
-          symlinkSync(dir, linkPath, 'junction')
-          steps.push('node_modules link 已建立')
-        }
-
-        // loader.create 动态加载（幂等：entry 已存在则跳过）
-        let exists = false
-        for (const entry of ctx.loader.entries()) {
-          const opts = entry.options as { name?: string }
-          if (opts?.name === name) { exists = true; break }
-        }
-        if (exists) {
-          steps.push('loader entry 已存在（跳过 create）')
-          normalizeEntriesByName(name)
-          refreshClientRow(name)
-        } else {
-          await ctx.loader.create({ name })
-          normalizeEntriesByName(name)
-          refreshClientRow(name)
-          steps.push('loader.create 已热装配（免重启生效）')
-        }
-
-        const client = clientStatus(name)
-        recordOp('install', steps.some(s => s.startsWith('dependencies +=') || s.startsWith('dependencies 已存在')))
-        return 'OK: ' + name + ' 热装配完成\n- ' + steps.join('\n- ') + `\n- ${client}\n（重启后由 bundles 列表正常装配，双路径一致；patch 层配置重启后接管）`
-      } catch (e) {
-        return 'ERROR: 安装失败: ' + String(e)
-      }
-      })
-    },
-  }))
 
   // ═══════════════════════════════════════════════════════════════════
   // A: 插件生产线——scaffold（生成）/ build（构建打包）/ release（发布）
@@ -3153,7 +3001,7 @@ export function apply(ctx: AppContext, config: Config): void {
 
   safeRegister(defineTool({
     name: 'dev_self_test',
-    description: '故障演练：一键回归注入器全链路——①注入假插件→host ✓ ②热重载→fiber uid 变化 ③自重载节流拒绝（<10s）④预检拦截（临时破坏 lib→拒绝自杀→恢复）⑤卸载即净 ⑥patch 写入合法性。全部自恢复、不留下污染；输出 PASS/FAIL 清单。',
+    description: '故障演练：一键回归注入器全链路——①注入假插件→host ✓ ②热重载→fiber uid 变化 ③自重载节流拒绝（<10s）④预检拦截（临时破坏 lib→拒绝自杀→恢复）⑤卸载即净（运行时撤销，不改 profile 配置）。全部自恢复、不留下污染；输出 PASS/FAIL 清单。',
     parameters: {},
     output: {
       schema: { type: 'string' },
@@ -3278,25 +3126,6 @@ export function apply(ctx: AppContext, config: Config): void {
         let entryGone = true
         for (const e of ctx.loader.entries()) { const o = e.options; if (!o.group && String(o.name) === TEST_PKG) entryGone = false }
         check('卸载即净（entry 移除）', entryGone, ui.slice(0, 100))
-        // ── 8. patch 写入合法性（writePatch → 防「[] 与列表混存」双顶层值）──
-        const patched = writePatch(`\n# self-test ${Date.now()}\n- id: self-test-check\n  disabled: true\n`)
-        const patchText = readFileSync(join(dirname(profileNodeModules), 'cordis.patch.yml'), 'utf8')
-        const hasBareArray = /^\s*\[\]\s*$/m.test(patchText)
-        const hasList = /^\s*- id:/m.test(patchText)
-        const patchValid = !(hasBareArray && hasList)
-        check('patch 写入（无 [] 与列表混存）', patched && patchValid, `bareArray=${hasBareArray} list=${hasList}`)
-        // 清理测试条目（self-test-check + selftest-runner disabled），
-        // ⚠️ 仅当 patch 为空时恢复 []（有列表条目时不能追加 []——双顶层，实测踩坑）
-        try {
-          let cleaned = patchText
-          cleaned = cleaned.replace(/\n# self-test \d+\n- id: self-test-check\n  disabled: true\n?/, '')
-          cleaned = cleaned.replace(/\n# 已卸载插件（[^\n]*\n- id: selftest-runner\n  disabled: true\n?/, '')
-          const stillEntries = /^\s*- id:/m.test(cleaned)
-          const finalPatch = stillEntries
-            ? cleaned
-            : cleaned.replace(/^\s*\[\]\s*$/m, '') + '\n[]\n'
-          writeFileSync(join(dirname(profileNodeModules), 'cordis.patch.yml'), finalPatch, 'utf8')
-        } catch { /* 清理失败不阻塞 */ }
       } catch (e) {
         check('整体', false, String(e))
       } finally {
@@ -3346,7 +3175,7 @@ export function apply(ctx: AppContext, config: Config): void {
     //    仓库、已注入插件、官方 packages 的服务面与构建模式），不重复造轮子；
     // 5) 使命：若注入器无法支撑此闭环，优先修复注入器。
     // ⚠️ 静态常量文本（缓存原则：静态到头）——严禁动态拼接。
-    text: '本环境装有 dsh-super-injector-mod（dev_* 工具，注入器自用修改版）：任意本地插件包可运行时注入——工具包/守护循环（timer+LLM 自主 agent loop）/UI 面板/混合形态，同一通道；注入即完整生效（host+UI）、可热重载与自重载、卸载即净。插件自身的提示词/工具/循环皆可自我优化；建新插件优先克隆/借鉴/重构生态已有资源（dsh-external 仓库、已注入插件、官方 packages 模式），不重复造轮子。若注入器无法支撑此闭环，优先修复注入器。从零体验路径：dev_plugin_status → dev_self_test → dev_scaffold_plugin → dev_build_plugin → dev_inject_plugin → dev_uninject_plugin。\n\n【等待纪律（2026-10-11 暴毙事故教训）】job_output / wait_agent 等阻塞等待一律不要把 timeout 设成分钟级：单次等待上限 30000ms，超时即返回现状再决策。原因：长等待期间主事件循环被占住，一旦宿主已被搞坏（如 client 插件重载导致渲染端 slot 崩溃），会话会卡在「人还活着但没人应答」的状态直到被强杀，表现为莫名暴毙。长任务改用轮询式短等待或事件驱动。同理：重载带 client 的插件后，务必确认渲染端已整页重载（dev_reload_package 返回值会告知），不要在渲染端状态未知时继续长时间工作。',
+    text: '本环境装有 dsh-super-injector-mod（dev_* 工具，注入器自用修改版）：任意本地插件包可运行时注入——工具包/守护循环（timer+LLM 自主 agent loop）/UI 面板/混合形态，同一通道；注入即完整生效（host 工具立刻可用；被注入插件**自己**带的 client UI 也会被联动补扫生效——本插件自身已不带 UI）、可热重载与自重载、运行时撤销即净。插件自身的提示词/工具/循环皆可自我优化；建新插件优先克隆/借鉴/重构生态已有资源（dsh-external 仓库、已注入插件、官方 packages 模式），不重复造轮子。若注入器无法支撑此闭环，优先修复注入器。从零体验路径：dev_plugin_status → dev_self_test → dev_scaffold_plugin → dev_build_plugin → dev_inject_plugin → dev_uninject_plugin。\n\n【等待纪律（2026-10-11 暴毙事故教训）】job_output / wait_agent 等阻塞等待一律不要把 timeout 设成分钟级：单次等待上限 30000ms，超时即返回现状再决策。原因：长等待期间主事件循环被占住，一旦宿主已被搞坏（如 client 插件重载导致渲染端 slot 崩溃），会话会卡在「人还活着但没人应答」的状态直到被强杀，表现为莫名暴毙。长任务改用轮询式短等待或事件驱动。同理：重载带 client 的插件后，务必确认渲染端已整页重载（dev_reload_package 返回值会告知），不要在渲染端状态未知时继续长时间工作。',
     })
   } catch (e) {
     logger.warn('[super-injector] systemPrompt.context 重复注册容忍（跳过，新实例继续运行）: %s', e instanceof Error ? e.message : String(e))
@@ -3374,87 +3203,4 @@ export function apply(ctx: AppContext, config: Config): void {
     }
   } catch { /* 缓存自愈失败不阻塞 */ }
 
-  // ═══════════════════════════════════════════════════════════════════
-  // 插件管理 UI API（settings.section 页面后端）
-  // 端点：GET /list（registry+状态+统计）、POST /uninstall{match}、
-  //       POST /inject{dir}、POST /ingest{dir,title}（新建会话内化）
-  // ═══════════════════════════════════════════════════════════════════
-  async function readBody(req: any): Promise<string> {
-    const chunks: Buffer[] = []
-    for await (const c of req) chunks.push(Buffer.from(c))
-    return Buffer.concat(chunks).toString('utf8')
-  }
-
-  /** 新建 agent 会话，把任意目录内化成插件（AI 自主完成分析→脚手架→构建→注入）。 */
-  async function startIngest(dir: string, title?: string): Promise<string> {
-    const abs = resolve(dir)
-    if (!existsSync(abs)) return 'ERROR: 目录不存在: ' + abs
-    const agentsSvc = ctx.get('agents') as { create?: (options: any) => Promise<{ agent: { id: string } }> } | undefined
-    if (!agentsSvc || typeof agentsSvc.create !== 'function') return 'ERROR: agents 服务不可用（无法新建会话）'
-    const sessionId = 'ingest-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
-    const prompt = `请把目录 ${abs} 里的内容**内化成 DSH 插件**。步骤：①分析内容（代码/脚本/配置/文档/资源，任意形态）②决定插件形态（toolkit 工具包 / daemon-loop 守护循环 / ui-panel UI 面板 / hybrid 混合）③用 dev_scaffold_plugin 生成骨架或直接编写插件包（package.json/tsconfig/scripts/build.sh/src）④dev_build_plugin 构建⑤dev_inject_plugin 注入⑥dev_self_test 自检确认。若内容本身已是可注入插件包（含 package.json+lib/）则直接构建注入。完成后汇报插件名与用途。`
-    const seed = [{
-      type: 'user/message',
-      seq: 0,
-      time: Date.now(),
-      // ⚠️ user/message 的 data 就是消息本体（dsh-session 事件契约），不能包一层
-      // `message:`——嵌套形状会让 router-standard 的 sessionMode 提取不到文本，
-      // 插件生成的首条消息被误判 weak（router-standard issue #1 联动修复）。
-      data: {
-        kind: 'user',
-        source: { kind: 'user' },
-        content: [{ type: 'text', text: prompt }],
-      },
-    }]
-    const handle = await agentsSvc.create({
-      sessionId,
-      meta: { cwd: process.cwd() },
-      seed,
-    })
-    auditLog('ingest-session', `${abs} → 会话 ${handle.agent.id}（${title ?? '内化插件'}）`)
-    return `OK: 内化会话已创建（${handle.agent.id}）——AI 正在把内容变成插件，会话列表可见`
-  }
-
-  ctx.effect(() => ctx.webServer.register({
-    kind: 'prefix',
-    path: '/super-injector/api',
-    handler: async (req: any, res: any) => {
-      const send = (code: number, obj: unknown): void => {
-        res.writeHead(code, { 'content-type': 'application/json; charset=utf-8' })
-        res.end(JSON.stringify(obj))
-      }
-      try {
-        const url = new URL(req.url ?? '/', 'http://localhost')
-        const path = url.pathname.replace(/^\/super-injector\/api/, '') || '/'
-        if (req.method === 'GET' && path === '/list') {
-          const entries = readRegistry().map((e) => ({ ...e, active: hasActiveEntry(e.name) }))
-          return send(200, { ok: true, entries, stats: opStats, clientDeclared: !!process.env.DSH_WEB })
-        }
-        if (req.method === 'POST' && path === '/uninstall') {
-          const body = JSON.parse(await readBody(req))
-          const match = String(body?.match ?? '').trim()
-          if (!match) return send(400, { ok: false, error: 'match 必填' })
-          const result = await uninject(match)
-          return send(200, { ok: true, result })
-        }
-        if (req.method === 'POST' && path === '/inject') {
-          const body = JSON.parse(await readBody(req))
-          const dir = String(body?.dir ?? '').trim()
-          if (!dir) return send(400, { ok: false, error: 'dir 必填' })
-          const result = await inject(dir)
-          return send(200, { ok: true, result })
-        }
-        if (req.method === 'POST' && path === '/ingest') {
-          const body = JSON.parse(await readBody(req))
-          const dir = String(body?.dir ?? '').trim()
-          if (!dir) return send(400, { ok: false, error: 'dir 必填（要内化成插件的文件夹路径）' })
-          const result = await startIngest(dir, String(body?.title ?? ''))
-          return send(200, { ok: true, result })
-        }
-        return send(404, { ok: false, error: 'not found: ' + path })
-      } catch (e) {
-        return send(500, { ok: false, error: String(e instanceof Error ? e.message : e) })
-      }
-    },
-  }), 'super-injector: plugin-manager-api')
 }

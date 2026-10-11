@@ -5,6 +5,56 @@
 > **版本以 git tag 为准**：已发布 v0.3.1 / v0.3.3（GitHub Releases 资产）；未打 tag 的
 > 小节为开发史（其内容随下一个发布一并交付）。
 
+## [0.4.0-mod.1] — 2026-10-12（未发布）
+
+### 移除（插件管理职责与自带 UI 全部剥离）
+
+- **删除自带 UI（client 半侧）**：`src/client/`、`lib/client.js`、`tsdown.config.ts`、
+  `scripts/verify-client-load.mjs` 全部移除；`package.json` 不再声明 `dsh.client`、
+  不再导出 `./client`、不再有 `build:client` / `verify:client` 脚本。
+  **渲染端不再加载本插件任何代码**——历史上 `renderSlot is not a function` 界面报废、
+  渲染进程 OOM、会话整片 hero 空态，都源自 client 半侧参与渲染端模块图，现从根上消除。
+- **删除 host 侧 UI 后端**：`/super-injector/api` 整段（`GET /list`、`POST /uninject`、
+  `POST /inject`、`POST /ingest`）移除。这是四个**无额外鉴权**的 HTTP 端点
+  （`/ingest` 可凭一个路径新建 agent 会话），删除是安全收敛而非单纯瘦身。
+- **删除 `dev_install_package`（装）**：写 profile `package.json` + `bundles` 的能力与官方
+  `dsh-plugin-manager`（CLI / Web / agent 工具三通道）重复，且与本包「不碰 profile 配置」
+  的自我定位矛盾。
+- **`dev_uninject_plugin`（卸）瘦身**：**保留**（它是 `dev_inject_plugin` 的逆操作，而官方
+  Plugin Manager 看不见未写进配置的注入项），但**去掉写 profile patch `disabled` 的动作**——
+  不再改任何 profile 配置文件。代价：对手工装进 `bundles` 的插件，撤销不再自动阻断其
+  bundle patch 自装配（那类插件请改用官方 plugin-manager 卸载）。
+- **开关**：本包从来就没有 enable/disable 能力，此项归官方。
+
+### 定位
+
+自此本包只做一件事：**补上官方留白的那一格**——把**未写进 profile 配置**的插件包挂进
+loader 树，配合热重载 / 侧挂区 / 生产线 / 自愈构成开发闭环。
+装 / 卸 / 开关 / 配置落盘一律归官方 `dsh-plugin-manager`。
+
+### 保留（未变更）
+
+- 工具：`dev_inject_plugin` / `dev_injected_list` / `dev_uninject_plugin` /
+  `dev_reload_package` / `dev_reload_preset` / `dev_clear_routes` / `dev_heal_links` /
+  `dev_fix_patch` / `dev_plugin_status` / `dev_stage_*` ×5 / `dev_scaffold_plugin` /
+  `dev_build_plugin` / `dev_release_plugin` / `dev_self_test`。
+- 生产线仍支持生成带 client 的 `ui-panel` / `hybrid` 形态——那是**目标插件**的 UI，
+  与本包自身是否带 UI 无关。
+- 重启自动恢复（registry + `restore()`）、client 模块图重组广播（作用于**被注入插件**的
+  UI 生效）、`dev_reload_package` 自伤护栏与 `force` 逃生门。
+
+### 验证
+
+- `node scripts/build-esbuild.mjs` 通过（仅构建 host 产物；断言 host 含包名、无 `-mod-mod` 双后缀）。
+- `tsc -p tsconfig.json --noEmit`：除下述既有问题外 **0 错误**（临时屏蔽该既有行后实测 0 错误，
+  证明本次删除未引入任何类型问题）。
+
+### 已知的既有问题（本次未动）
+
+- `src/index.ts` 的 `cleanupStaleEntries()` 中 `entry.parent.remove()` 返回 `void`，
+  代码却按 Promise 处理（`p.then` / `p.catch`）。`tsc --noEmit` 因此报 4 条错误
+  （TS1345 ×2 / TS2339 ×2）。**改动前即存在**，与本次无关，留待单独修复。
+
 ## [0.3.3] — 2026-08-15（已发布，git tag v0.3.3）
 
 ### 更新（高性能引导升级为 P1-P23 完整认知）
