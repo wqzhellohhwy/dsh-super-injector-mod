@@ -281,8 +281,11 @@ minimal 99/96 vs standard 91 vs 两阶段 98/99、触发机制微探针、轨迹
 
 ---
 
+**本仓库（自用修改版）**：https://github.com/wqzhellohhwy/dsh-super-injector-mod
 **上游仓库**：https://github.com/yjh051108/dsh-super-injector
 **上游 Release**：https://github.com/yjh051108/dsh-super-injector/releases
 
 > 本仓库为**自用修改版**（`@dsh-external/dsh-super-injector-mod`），基线 v0.3.3。
 > 改动清单见文首说明；上游的设计哲学、装配机制与防自毁逻辑均予保留。
+>
+> git remote 约定：`origin` = 本修改版仓库，`upstream` = 上游 `dsh-super-injector`。
