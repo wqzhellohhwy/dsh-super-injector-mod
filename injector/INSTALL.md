@@ -1,4 +1,57 @@
-# dsh-super-injector 安装手册
+# dsh-super-injector-mod 安装手册
+
+> ## ⚠️ 先读这段：本仓库是**修改版**，包名与上游不同
+>
+> 下面的正文（第 1–8 节）是**上游 `@yjh051108/dsh-super-injector` 的原文**——其中的包名、
+> entry id、仓库链接、tgz 文件名**全部指上游原版**。照抄会装成上游，**不是本修改版**。
+>
+> | | 上游原版 | **本仓库（修改版）** |
+> |---|---|---|
+> | 包名 | `@dsh-external/dsh-super-injector` | **`@dsh-external/dsh-super-injector-mod`** |
+> | entry id | `dsh-super-injector` | **`dsh-super-injector-mod`** |
+> | 仓库 | `yjh051108/dsh-super-injector` | `wqzhellohhwy/dsh-super-injector-mod` |
+> | 自带 UI | 有（client 半侧） | **已删除**（0.4.0-mod.1 起，渲染端不再加载本包任何代码） |
+>
+> 两者**包名不同、可并存**，互不覆盖（但 entry id 也不能撞，见 README 的说明）。
+>
+> ---
+>
+> ### 装本修改版的正确姿势
+>
+> 本包是**本地 link 安装**（`private: true`，不发布 npm），装法就是「建 junction + 写 profile 配置」：
+>
+> ```powershell
+> $pkg     = '<本仓库路径>\injector'      # 含 package.json 的那个目录
+> $profile = '<目标 profile>'              # web / backup / desktop / ...
+> $profDir = "$env:USERPROFILE\.dsh\profiles\$profile"
+> $linkDir = "$profDir\node_modules\@dsh-external\dsh-super-injector-mod"
+>
+> # 1) junction：把包挂进该 profile 的 node_modules
+> New-Item -ItemType Directory -Path (Split-Path -Parent $linkDir) -Force | Out-Null
+> New-Item -ItemType Junction -Path $linkDir -Target $pkg | Out-Null
+> ```
+>
+> 2) 写该 profile 的 `package.json`，两处：
+> `dependencies` 加 `"@dsh-external/dsh-super-injector-mod": "link:<本仓库路径>/injector"`，
+> `dsh.profile.bundles` 加 `"@dsh-external/dsh-super-injector-mod"`。
+>
+> **不需要**再配 `profileNodeModules` / `registryFile` —— 0.4.0-mod.2 起本包会自动按
+> **当前实例自己的 profile** 定位（读 dsh 的 `profileContext` 服务）。
+>
+> ⚠️ **desktop profile 不能用 CLI 装**：`dsh plugin --profile desktop ...` 会被
+> `profile "desktop" is managed exclusively by the Electron application` 拒绝，
+> 请改用 GUI 的插件管理页。
+>
+> 装完重启该实例，向 agent 说一句 `dev_plugin_status`，看到 `dsh-super-injector-mod`
+> 且状态 active 即成功。
+>
+> ⚠️ 仓库里的 `scripts/install-injector.ps1`（上游遗留）**不要用于 desktop**：它写的是
+> 上游包名，且会用 `Stop-Process` 停掉命令行里带 `--profile` 的**所有** node 实例
+> （会连带杀掉别的 profile 正在跑的会话）。
+
+---
+
+> 以下正文为**上游原文**（包名、路径、链接均指上游原版），仅作参考。
 
 > 给第一次接触的人/agent 看。三种方式任选其一，**推荐方式 A**。
 > 装完用第 5 节验证，装不上看第 6 节排查，想卸载看第 7 节。

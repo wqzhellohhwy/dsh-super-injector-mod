@@ -495,9 +495,9 @@ export const name = 'dsh-super-injector-mod'
 export const inject = ['loader', 'timer', 'tools', 'systemPrompt', 'webServer']
 
 export interface Config {
-  /** 注入清单文件路径（缺省 ~/.dsh/super-injector/registry.json）。 */
+  /** 注入清单文件路径（缺省 $DSH_HOME/super-injector/instances/<当前 profile>/registry.json）。 */
   registryFile: string
-  /** junction 链接目标目录（缺省 ~/.dsh/profiles/web/node_modules）。 */
+  /** junction 链接目标目录（缺省 <当前 profile 目录>/node_modules）。 */
   profileNodeModules: string
   /** 启动时自动恢复清单中的注入。 */
   autoRestore: boolean
@@ -573,8 +573,25 @@ export function apply(ctx: AppContext, config: Config): void {
   // 不同用户（如服务账户/另一用户 profile），homedir() 推导的路径会全部错位——
   // junction 建到错误 profile、loader 找不到包。DSH_HOME 环境变量才是权威。
   const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh')
-  const registryFile = config.registryFile || join(dshHome, 'super-injector', 'registry.json')
-  const profileNodeModules = config.profileNodeModules || join(dshHome, 'profiles', 'web', 'node_modules')
+  // ⚠️ profile 感知（实测踩坑）：注入器跑在哪个 profile 的实例里，就必须把 junction
+  // 建到**那个** profile 的 node_modules、把清单存到**那个** profile 的子目录。旧版把
+  // 两者都写死成 profiles/web + 全局 registry.json，造成两个实际故障：
+  //   1) 在 desktop / backup 实例里注入 → junction 建到 web，当前实例根本加载不到，
+  //      表现为 dev_inject_plugin 返回 "host ✗"（注入功能整体失效）；
+  //   2) 多个 profile 共用 $DSH_HOME 时读到同一份清单，互相恢复对方注入的插件
+  //      （实测：backup 启动时读到 desktop 注入的包并报 no-fiber）。
+  // dsh 在 boot 阶段就 hostCtx.provide('profileContext', { name, dir, ... })，
+  // 直接问当前实例自己是谁，比任何环境变量/路径猜测都可靠。
+  // 刻意不把 profileContext 写进 inject 声明：拿不到时静默回退旧默认值，
+  // 免得在没有该服务的宿主里让本插件卡在 pending。
+  const profileContext = ctx.get('profileContext') as { name?: string; dir?: string } | undefined
+  const profileName = profileContext?.name || 'web'
+  const registryFile = config.registryFile
+    || join(dshHome, 'super-injector', 'instances', profileName, 'registry.json')
+  const profileNodeModules = config.profileNodeModules
+    || (profileContext?.dir
+      ? join(profileContext.dir, 'node_modules')
+      : join(dshHome, 'profiles', profileName, 'node_modules'))
   // 热重载的 config 合并路径可能缺 schema 新字段（旧 fiber _config + patch 旧值），
   // 防御性兜底（schema 默认值只在 loader 装配时保证）。
   const intervalMs = config.intervalMs ?? 1500

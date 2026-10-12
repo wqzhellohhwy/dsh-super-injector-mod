@@ -5,6 +5,31 @@
 > **版本以 git tag 为准**：已发布 v0.3.1 / v0.3.3（GitHub Releases 资产）；未打 tag 的
 > 小节为开发史（其内容随下一个发布一并交付）。
 
+## [0.4.0-mod.2] — 2026-10-12（未发布）
+
+### 修复（profile 感知 —— 注入器跑在哪个实例，就只作用于哪个实例）
+
+旧版把两个默认值写死成「web profile + 全局清单」，导致本包在**其他 profile 的实例里
+注入功能整体失效**，且多个 profile 共用 `$DSH_HOME` 时互相串清单。现改为直接读 dsh 在
+boot 阶段提供的 `profileContext` 服务（`{ name, dir, ... }`）：
+
+- **`profileNodeModules` 默认值**：`profiles/web/node_modules` → **`<当前 profile 目录>/node_modules`**。
+  旧行为下的实际故障：在 desktop / backup 实例里调 `dev_inject_plugin`，junction 被建到
+  `profiles/web/node_modules`，**当前实例根本加载不到**，表现为返回 `host ✗`。
+- **`registryFile` 默认值**：`$DSH_HOME/super-injector/registry.json` →
+  **`$DSH_HOME/super-injector/instances/<当前 profile>/registry.json`**。
+  旧行为下的实际故障：desktop 与 backup 共用 `$DSH_HOME`，两边读到同一份清单、
+  **互相恢复对方注入的插件**（实测：backup 启动时读到 desktop 注入的包并报 `no-fiber`）。
+- `self-heal.log` / `staging.json` / `stats.json` / `self-reload.json` 都由
+  `dirname(registryFile)` 派生，**自动一并按 profile 隔离**，无需额外配置。
+- `profileContext` **刻意不写进 `inject` 声明**：拿不到该服务时静默回退旧默认值，
+  免得在没有它的宿主里让本插件卡在 `pending`。
+- 显式配置 `profileNodeModules` / `registryFile` 的行为不变（**配置优先**）。
+
+> ⚠️ **破坏性变更（仅影响未显式配置者）**：清单文件位置变了，旧的全局
+> `$DSH_HOME/super-injector/registry.json` 不再被读取。需要迁移时，把其中条目手工并入
+> `instances/<profile>/registry.json`，或对相关插件重新注入一次即可。
+
 ## [0.4.0-mod.1] — 2026-10-12（未发布）
 
 ### 移除（插件管理职责与自带 UI 全部剥离）
