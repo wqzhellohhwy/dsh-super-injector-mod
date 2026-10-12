@@ -30,6 +30,28 @@ boot 阶段提供的 `profileContext` 服务（`{ name, dir, ... }`）：
 > `$DSH_HOME/super-injector/registry.json` 不再被读取。需要迁移时，把其中条目手工并入
 > `instances/<profile>/registry.json`，或对相关插件重新注入一次即可。
 
+### 其它（仓库工具 `scripts/install-injector.ps1` 重写）
+
+上游遗留的装配脚本有三个雷，已整体重写并实测：
+
+- **写上游旧包名** `@dsh-external/dsh-super-injector` → 改为本修改版包名，并**校验包目录
+  `package.json` 的 `name`**；指向上游原版或别的包时直接报错退出（防装错）。
+- **`Remove-Item $linkDir -Recurse -Force` 作用在 junction 上** → 会跟随链接递归删除、
+  毁掉源目录。改为只走 `rmdir` 断链；目标若是真实目录/文件则**报错拒删**。
+- **`CommandLine -match '(web|--profile)'` 找进程后 `Stop-Process -Force`** → 会连带杀掉
+  **所有** profile 的 dsh 实例（包括别的会话）。改为只匹配「dsh 入口 `bin.js` + 目标
+  profile 名」，且先列出进程清单、确认后才停。
+- 另修：`dsh --profile desktop` 根本起不来（Electron 独占管理）→ 脚本对 desktop **直接
+  拒绝**并提示走 GUI；`Set-Content -Encoding UTF8` 在 PS 5.1 会写 BOM 污染 `package.json`
+  → 改用 UTF-8 无 BOM 写入；重启默认关闭（须显式 `-Restart`）；日志重定向到文件
+  （旧版 `RedirectStandardOutput` 后从不读取，管道写满会卡住子进程）。
+- 脚本文件本身改为 **UTF-8 with BOM**：PS 5.1 对无 BOM 文件按 GBK 解析，原先的中文提示
+  在 Windows PowerShell 下全是乱码。
+- 新增 `-Uninstall`（对称卸载）与 `-PackageDir` / `-DshHome` 显式指定。
+
+实测六项全过：desktop 守卫 / 装配 / 幂等 / 包名校验 / 真实目录防护（哨兵文件未被殃及）/
+卸载。
+
 ## [0.4.0-mod.1] — 2026-10-12（未发布）
 
 ### 移除（插件管理职责与自带 UI 全部剥离）

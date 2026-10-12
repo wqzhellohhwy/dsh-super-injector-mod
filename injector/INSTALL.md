@@ -45,9 +45,10 @@
 > 装完重启该实例，向 agent 说一句 `dev_plugin_status`，看到 `dsh-super-injector-mod`
 > 且状态 active 即成功。
 >
-> ⚠️ 仓库里的 `scripts/install-injector.ps1`（上游遗留）**不要用于 desktop**：它写的是
-> 上游包名，且会用 `Stop-Process` 停掉命令行里带 `--profile` 的**所有** node 实例
-> （会连带杀掉别的 profile 正在跑的会话）。
+> 💡 也可以直接用仓库里的脚本：`.\scripts\install-injector.ps1 -Profile <profile>`
+> （卸载加 `-Uninstall`，装完自动重启加 `-Restart`）。它可用于**命令行可管理的 profile**
+> （web / backup 等）：会校验包名防装错、只断链绝不递归删、重启只影响目标 profile 自己。
+> **但 desktop 仍须走 GUI 插件页**——Electron 独占管理，命令行装不了也重启不了。
 
 ---
 
