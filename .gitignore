@@ -1,9 +1,10 @@
 node_modules/
-*.log
+lib/
+*.tsbuildinfo
+*.tgz
+# 备份/临时（2026-10-25 补）
 .tmp/
-# flattened preset heavy probe data (keep out of git)
-preset/probe/deepseek-v4-pro-weights/
-preset/probe/dsh-2020-dataset/
-preset/probe/results/
-preset/probe/sessions/
-preset/probe/deepseek-tokenizer/
+*.TMP
+*.bak
+*.bak-*
+*.BROKEN*

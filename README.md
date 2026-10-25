@@ -1,72 +1,319 @@
-# dsh-routing-suite — 注入器 × 思维模式路由 套装
+# dsh-super-injector-mod — 超级模组注入器（自用修改版）
 
-一个仓库装齐「运行时手术台 + 思维模式路由预设」：先装注入器（免重启运行时管理层），
-再用它装配 router-standard 预设（任务感知思维模式路由，P1-P23 实测）。
+> ## ⚠️ 本仓库是自用修改版（fork / mod）
+>
+> **基线**：上游 [yjh051108/dsh-super-injector](https://github.com/yjh051108/dsh-super-injector) **v0.3.3**
+> **包名**：`@dsh-external/dsh-super-injector-mod`（与上游 `@dsh-external/dsh-super-injector` **可并存**，不互相覆盖）
+> **版本**：`0.4.0-mod.4`
+>
+> 本修改版相对上游的改动：
+>
+> | 改动 | 说明 |
+> |---|---|
+> | **client 插件重载后模块图重组广播** | 上游重载带 client 的插件时只通知 bundle rev 变化（`rebuilt`），**假定渲染端能自愈**。实测会因 DSH 客户端「整包 bundle + slot 注册表」无模块级边界而导致模块图与 slot 注册错位（`renderSlot is not a function`），界面报废且只能重启恢复。本版在重载后调 `compose()` + `notifyGraphChanged()` **主动重组并广播模块图**，并确保目标行在表内（`processOne` 补注册） |
+> | **`dev_reload_package` 自伤护栏 + `force` 逃生门** | 重载关键基础设施（注入器自身 / `dsh-tool-manager`）前默认**拦截**并说明风险与替代路径；确需重载时传 `force: true` 放行。防止「重载过程中工具表被摘除重建、正在运行的会话失去工具而无法自救」 |
+> | **改名后的自识别兼容** | `matchesSelf` 改为 `isSelfName`：按「去 `@scope/` 前缀后是否为自身名」判定，兼容 `dsh-super-injector` / `dsh-super-injector-mod` / 裸短名。原实现用 `includes('dsh-super-injector')`，改名后**短名会绕过防自毁检查**（实测捕获） |
+> | **构建方式** | 本机以 **esbuild** 重建产物（上游走 tsdown）。形态逐项对齐：ESM + 自包含（除 `node:` 外全部内联）、`minify: false`、`charset: utf8`（保留中文原文，避免被转义为 `\uXXXX`） |
+> | **0.4.0：剥离插件管理职责与自带 UI** | 删除 client 半侧（不再声明 `dsh.client`，渲染端不再加载本插件任何代码）与 `/super-injector/api` 四个无鉴权端点；删除 `dev_install_package`（装）；`dev_uninject_plugin` 瘦身为**纯运行时撤销**（不再写 profile patch）。装 / 卸 / 开关归官方 `dsh-plugin-manager`。详见 CHANGELOG |
+>
+> **上游内容原样保留在下方**（安装、用法、设计哲学等章节），仅包名与版本号按本修改版调整。
+> 上游的 peer 依赖、装配机制、防自毁设计**未做改动**。
 
-[中文](README.md) | [English](README.en.md)
+> ## 🎉 v0.3.0 重大声明（2026-08-14）
+>
+> **从经验补丁到源码契约——注入器完成规范重构。**
+>
+> 本版本按 [docs/SPEC.md](./docs/SPEC.md)（基于 DSH 0.1.0-rc.6 源码语义推导的
+> 设计契约）重构自重载为**官方 REPLACE 结构**：工具只排程、绝不亲自自杀；
+> reboot 走 `entry._dispose`（官方 `_disposing` 豁免）+ 失败自动 rollback。
+> 从此注入器的一切行为都有源码依据，不再依赖经验补丁。
+>
+> **里程碑回顾**：
+> - 三轮零上下文 subagent 评测：9/10 → 9.5/10 → **10/10**
+> - 作死压力测试：连环自杀/坏语法/悬空 junction/循环注入卸载——**零崩溃零残留**
+> - **云源自举**：下载 release 副本 → 装配 → 注入器从云端副本运行（自检 8/8）
+> - **免杀进程恢复**：失败 → touch patch（include.refresh 进程内重装配）→ 6 秒复活
+> - **DSH 正式版兼容**：0.1.0-rc.6 一行不改直接运行（peerDeps 范围声明实证）
+>
+> 哲学不变：**一切皆插件**——注入器是 DSH 生态的运行时注入标准层，
+> 让"插件想长成什么样就长成什么样"。
 
-## 安装链（三步）
+DSH 生态的 **BepInEx 式模组注入入口**：运行时把任意本地插件包注入运行中的 web，
+不碰 patch / package.json / bundles 列表、不重启进程。**注入即完整生效：host 工具立刻可用，被注入插件自己的 client UI 也会被联动补扫生效。**
 
-```powershell
-# 1. 拉套装（单仓库：injector/preset 内容已直接入库，无需 submodule）
-git clone https://github.com/yjh051108/dsh-routing-suite.git
-cd dsh-routing-suite
+> 灵感：官方装配机制（profile bundle / repository-plugin）是唯一的"官方入口"，就像游戏
+> 只有启动器能装模组。本插件打破这一点——引导器走官方入口装一次，之后**万物皆可运行时注入**。
 
-# 2. 一键安装（注入器装配 + 预设复制 + 布局自检 + 提示重启）
-.\install.ps1
+## 安装（三选一）
+
+### 方式 A：Release 包（推荐，免构建）
+
+从本仓库 Releases 下载 tgz，或直接使用本修改版的本地目录。解压/定位到插件目录（含 `lib/` 与 `cordis.patch.yml`），然后：
+
+```bash
+# 官方装配（重启后由 bundles 接管，生产态）
+dsh plugin --profile web add <插件目录>
+
+# 或运行时注入（免重启，开发态；需任一环境已常驻注入器）
+# 对 AI 说：dev_inject_plugin <插件目录>
 ```
 
-或手动：
+> **桌面版（desktop profile）注意**：`dsh plugin --profile desktop` 会被 CLI 拒绝
+> （该 profile 由 Electron 独占）。请手动编辑
+> `~/.dsh/profiles/desktop/package.json`：在 `dependencies` 加 `link:` 依赖，
+> 并在 **`dsh.profile.bundles` 里加上包名**（两处都要，缺一装配失败）。
 
-```powershell
-# 步骤 1：装配注入器（官方装配，重启后由 bundles 接管）
-dsh plugin --profile web add .\injector
-# dsh 不在 PATH 时：npx '@deepseek-ai/dsh' plugin --profile web add .\injector
+### 方式 B：git 装配
 
-# 步骤 2：安装 router 预设（每个预设目录平铺复制到 .agent-presets 下，DSH 只扫一级子目录）
-$target = Join-Path $env:USERPROFILE '.dsh\.agent-presets\router-standard'
-Copy-Item -Recurse .\preset\router-standard $target
-
-$target = Join-Path $env:USERPROFILE '.dsh\.agent-presets\router-spec'
-Copy-Item -Recurse .\preset\router-spec $target
-
-# 步骤 3：重启 DSH → 新会话选择 Router Standard / Router Spec (experimental)
+```bash
+dsh plugin --profile web add <本修改版插件目录或 tgz>   # 本修改版
 ```
 
-> 注意：不要复制 `preset` 整目录（会多套一层，DSH 发现不了预设）。
+> git 依赖拉取的是源码仓库（不含 `lib/`）；包内 `prepare` 钩子会在安装时自动
+> git 依赖拉取的是源码仓库（不含 `lib/`）；包内 `prepare` 钩子
+> （`node scripts/prepare.mjs`）会在安装时自动构建自包含 `lib/`。
+> 若构建失败，请改用方式 A 的 Release tgz（预构建产物）。
 
-## 组件
+### 方式 C：引导装配（源码方式，只需一次）
 
-| 路径 | 仓库 | 版本 | 作用 |
-|---|---|---|---|
-| `injector/` | [dsh-super-injector](https://github.com/yjh051108/dsh-super-injector) | [v0.3.3](https://github.com/yjh051108/dsh-super-injector/releases/tag/v0.3.3) | 运行时注入器：dev_* 工具全家桶（注入/热重载/侧挂转正/卸载/路由自愈）；`github:` 装配由 prepare 钩子自动构建 |
-| `preset/` | [dsh-router-standard](https://github.com/yjh051108/dsh-router-standard) | [v0.3.0 … 主线 v1.19.1/v34](https://github.com/yjh051108/dsh-router-standard/releases/tag/v0.3.0) | 思维模式路由预设：router-standard（分类 persona + 完整 sections）/ router-spec（深度思考优先）。router-pro 为规划中（planned），未随 v0.3.0 发布 |
+> ⚠️ 仅限未走 bundles 装配时使用：注入器自带 bundle 层会自注册
+> `dsh-super-injector`，与下方手动 `insert` 撞同一个 loader entry id，会报
+> `duplicate loader entry id`。走方式 A/B 装配后请勿再加这一条。
 
-> 版本号以各组件仓库的 git tag 为准（列内链接直达对应 Release）。
+在 `~/.dsh/profiles/web/cordis.patch.yml` 添加：
 
-两个组件随本仓库统一演进（`injector/` 与 `preset/` 已是仓库内普通目录，内容直接入库）；上游独立仓库 `dsh-super-injector` / `dsh-router-standard` 保留用于独立发布，后续可转镜像/归档。预设安装目录为 `preset/router-standard`（已平铺，无额外嵌套）。
+```yaml
+- insert:
+    - id: dsh-super-injector-mod
+      name: '@dsh-external/dsh-super-injector-mod'
+      config: {}
+```
 
-## router-standard 预设能力（P1-P23 实测摘要）
+引导器常驻后，任意超级模组随取随用，无需再碰官方配置。
 
-- **三行为带 + weak 内路由**：spec（计划-集体）/ react（执行者）/ mixed（陷阱，回避）/ weak（模型自分类）
-- **按模型选 persona**：Pro=spec 句+few-shot（区分度 +5.0）；Flash=neutral+classify（+5.7）
-- **近距离引导**：每轮用户消息后注入固定引导（缓存 92-94% 命中），路由 96% + 收敛 100% + 反稀释
-- **单任务三锚**（persona 静态）：回顾 + 收敛 + 反跑题 —— 开放任务完成率 0% → 100%
-- **plan-mode 保留**：只替换 persona section，plan 边界不失忆
-- **AI 自优化工具**：`dev_router_status` / `dev_router_mode` / `dev_mode_subagent`
+## 兼容性
 
-## v0.3.0 变更（真实装配链路修复）
+- **不硬编码 DSH 版本**：peerDependencies 全部为范围声明
+  （`@deepseek-ai/dsh-tools: >=0.0.1-rc <2`、`cordis: >=4.0.0-rc <5`）——DSH 升级不报废。
+- 已适配服务改名：`webServer`（原 httpServer）、`compaction`（原 compact）。
 
-- **首轮路由真实生效**（[#13](https://github.com/yjh051108/dsh-routing-suite/issues/13)）：经 `agent/inbox/claimed` 在装配前捕获首条真实用户消息，首个请求即按任务分类（此前所有会话首轮无条件 weak）
-- **近距离引导改走 `agent/pre-step`**（[#34](https://github.com/yjh051108/dsh-routing-suite/issues/34)/[#36](https://github.com/yjh051108/dsh-routing-suite/issues/36)/[#55](https://github.com/yjh051108/dsh-routing-suite/issues/55)）：引导与用户消息同请求注入，真实链路上可达，且不再产生额外的第二次 API 调用（此前每轮多 1 次调用 = 费用 2×）
-- **缺导入修复**（[#11](https://github.com/yjh051108/dsh-routing-suite/issues/11)）、preset.yml YAML 引号（[#53](https://github.com/yjh051108/dsh-routing-suite/issues/53)）、promoted 后完整回归（[#44](https://github.com/yjh051108/dsh-routing-suite/issues/44)）、安装脚本与文档修正（[#35](https://github.com/yjh051108/dsh-routing-suite/issues/35)/[#42](https://github.com/yjh051108/dsh-routing-suite/issues/42)/[#41](https://github.com/yjh051108/dsh-routing-suite/issues/41)）、injector git 装配自动构建（[#40](https://github.com/yjh051108/dsh-routing-suite/issues/40)）
+## 特性
 
-## 文档
+- 🔥 **热重载 + 自重载**：`dev_reload_package` 整包重载（清缓存 → 重新 import → 重建 fiber，失败回滚保留旧代）；注入器自身也支持自重载（自杀 → 全局定时器重建）
+- 🤖 **自动 watch**：注入即自动监听插件目录，改代码 build 后约 1.5 秒自动重载（无需手动触发）。该 1.5s 为注入清单源默认间隔（`intervalMs`）；`config.watches` 配置源为 30 秒。**指纹变化先预检新代码可加载**，通过才重载，失败保持旧代码
+- 🖥️ **注入插件 UI 完整生效**：清除 loader 幽灵 entry 隔离（normalizeEntry），client 模块补扫/联动/卸载清理——注入的插件 host 工具 + 图谱/面板等 UI 全部可用
+- 🧪 **开发侧挂区（staging）+ 持久化**：测试工具挂"后侧"不进 tools schema、缓存零污染；`dev_stage_promote` 一键转正；staging 落盘，**自重载/重启后转正工具自动恢复**
+- 🧹 **一键卸载**：`dev_uninject_plugin` fiber 全清理（工具/监听/路由/client 表）→ 清注入清单 → 删 junction，免重启；`self: true` 可自举卸载注入器自身
+- 🛠️ **路由自愈**：`dev_clear_routes` 直捣 webserver 内部路由表，热重载残留的孤儿路由免重启清除
+- 🔁 **重启自动恢复**：注入清单持久化（`$DSH_HOME/super-injector/instances/<当前 profile>/registry.json`，**按 profile 隔离**），重启后自动归位
+- 📊 **操作自检**：每次注入/重载/撤销返回 `host ✓ / client ✓` 双验证（client 指**被注入插件**的 UI 状态）；`dev_plugin_status` 含操作成功率统计
+- 🛡️ **失败可重试**：`hasActiveEntry` 权威防重 + 失败残留缓存自动清理 + 残留 entry 自动清理
 
-- 注入器引导（规范铁律 10 条）：`injector/README.md`
-- 路由预设论文与实验：`preset/docs/paper.md` + `preset/docs/experiments.md`（P1-P23）
-- 仓库结构迁移（submodule → 直接文件）：[docs/FLATTEN-MIGRATION.md](docs/FLATTEN-MIGRATION.md)
+## 与 dsh-evolve 的定位差异（生态互补）
 
-## 许可证
+| | dsh-evolve | dsh-super-injector |
+|---|---|---|
+| 形态 | **创造模式**：agent 现场写单文件插件源码（`~/.dsh/evolve/<name>.mjs`）热挂载 | **手术台**：注入开发者预构建的**完整插件包**（package.json + lib/） |
+| 适用 | agent 随对话长出小工具（记账/天气/周报） | 自主开发闭环（写 → build → 注入 → 热重载）；装 / 换成品模组走官方 `dsh-plugin-manager` |
+| 联动 | evolve 长出的源码可升级为完整包，再走注入器上膛 | 注入后可被 `dev_reload_package` 热重载 |
 
-MIT。致谢：xiaobright/modeltest（V4.1b 评测）、xiaobright/dsh-anchored-standard（锚定机制）。
+## 生态定位：官方之下的运行时标准层
+
+官方对插件体系的方向（2026-07 agent notes）：
+
+1. **否决安装命令 + 安装数据库 + marketplace**——持久化插件只有一种状态：**配置**（cordis.patch.yml / profile bundles / repositories），事务性 HMR 对账；
+2. **agent 自己管理运行时**——自指 cordis 工具集，运行时归 agent 管。
+
+翻译：官方钦定"**装什么**"（bundle / repository + 配置），但"**装完之后怎么改**"——把**未写进配置**的包挂进运行时、热重载、侧挂测试、一键转正、失败自愈——是官方留白。**这一块运行时开发面由本插件吃下；而"装 / 卸 / 开关"本身归官方 `dsh-plugin-manager`，本插件不再重复造。**
+
+| 生态入口 | 层 | 一句话分工 |
+|---|---|---|
+| 官方 bundle / repository | 装配层 | 唯一官方入口，配置即状态 |
+| plugin-registry | 官方薄控制台 | 官方格式插件管理与开发引导 |
+| marisa | agent 面工具链 | 临时插件 → 持久化插件的固化桥 |
+| mygo | 受管对象层 | 插件生命周期对象化（锁定/启停/依赖图） |
+| dsh-evolve | 创造模式 | agent 现场长出单文件能力 |
+| **dsh-super-injector** | **运行时手术台** | **开发闭环全家桶：运行时注入 / 热重载 / 侧挂转正 / 运行时撤销 / 路由自愈 / 插件生产线** |
+
+**设计原则**：
+
+1. **不发明协议**：注入的是标准插件包（package.json + lib/），格式就是官方包格式，装上即官方语义；
+2. **只做运行时，配置唯一归官方**：本包只做运行时注入（免重启，开发态），**不改 profile 的 `package.json` / `bundles` / `cordis.patch.yml`**——落配置、装、卸、开关一律走官方 `dsh-plugin-manager`；注入清单只是**运行时恢复缓存**，不是第二安装数据库；
+3. **模型可驱动**：dev_* 全是工具，agent 自己注入/卸载/转正——正踩在官方"agent 自己管理运行时"的方向上；
+4. **可逆且自愈**：注入可回滚（失败保旧代）、卸载即净（fiber 全清理）、残留可自愈（路由/缓存/entry 自动清理）。
+
+**目标**：成为官方装配机制之下、生态事实标准的**运行时管理层**——"启动器装模组"只是起点，注入器让 DSH 拥有"**万物可注入、注入可回滚、改完即生效**"的 Mod 级体验。
+
+## 工具全家桶（全部免重启）
+
+共 **18 个 `dev_*` 工具**（运行时 `dev_plugin_status` 实测口径）。分四域：
+
+### 注入核心（6）
+
+| 工具 | 说明 |
+|---|---|
+| `dev_inject_plugin` | 运行时注入本地插件包（junction 链接 + loader.create，`hasActiveEntry` 防重） |
+| `dev_uninject_plugin` | 运行时撤销注入模组（fiber dispose 全清理 + 清注入清单 + 删 junction；**不改 profile 配置**）。`self: true` 为自举卸载（仅对注入器自身） |
+| `dev_injected_list` | 列出注入清单 |
+| `dev_reload_package` | 整包热重载（清缓存 → 重新 import → 重建 fiber，失败回滚保留旧代；含自重载）。重载关键基础设施前默认拦截，`force: true` 放行 |
+| `dev_reload_preset` | 预设热更新（给 `.agent-presets/<preset>/agent.cordis.yml` 的相对 `.mjs` 引用加 `?v=N`，绕 ESM 缓存；已运行会话保持旧代） |
+| `dev_plugin_status` | 已装配插件清单、fiber 状态与操作成功率统计 |
+
+### 自愈修复（3）
+
+| 工具 | 说明 |
+|---|---|
+| `dev_clear_routes` | webserver 路由残留自愈（按 path 前缀删除孤儿路由） |
+| `dev_heal_links` | profile `link:` 依赖 junction 自愈（扫描悬空/缺失链接并重建，免重启） |
+| `dev_fix_patch` | profile patch 修复（`cordis.patch.yml` 按 entry id 去重，治 `duplicate loader entry id` 启动崩溃；备份原文件） |
+
+### 开发侧挂区（5）
+
+| 工具 | 说明 |
+|---|---|
+| `dev_stage_add` | 开发侧挂：测试工具挂后侧（不进 tools schema，缓存零污染） |
+| `dev_stage_call` | 调用侧挂工具测试 |
+| `dev_stage_list` | 列出侧挂工具（含转正状态） |
+| `dev_stage_promote` | 一键转正：侧挂工具挂前侧正式注册（唯一一次缓存刷新） |
+| `dev_stage_demote` | 撤回/注销侧挂或已转正工具 |
+
+### 插件生产线 + 自检（4）
+
+| 工具 | 说明 |
+|---|---|
+| `dev_scaffold_plugin` | 生成四种形态骨架（toolkit / daemon-loop / ui-panel / hybrid）——package.json + tsconfig + build.sh + 形态源码 |
+| `dev_build_plugin` | 构建并打包（探测 DSH_CHECKOUT → `bash scripts/build.sh` → tsc 编译 host → 有 `build:client` 则 tsdown 编译 UI → `npm pack` 出 tgz） |
+| `dev_release_plugin` | 发布 GitHub Release（`gh release create v<version> <tgz>`，tag + 附件 + notes 模板）。依赖 gh CLI 已认证 + git remote 就位 |
+| `dev_self_test` | 全链路故障演练（注入假插件 → 热重载 → 自重载节流拒绝 → 预检拦截 → 卸载即净）；项数随环境浮动，约 5-8 项 |
+
+> **生态分流**：装 / 卸 / 开关成品插件走官方 `dsh-plugin-manager`；临时 profile 隔离实验走 `dsh-profile-lab`。本包的注入是**开发态运行时通道**。
+
+## 插件开发指南（生产线）
+
+**哲学**：插件想长成什么样就能长成什么样——工具包 / 守护循环（timer+LLM 自主 agent loop）/ UI 面板 / 混合形态，同一注入通道；注入即完整生效（host 工具 + **被注入插件自己的** UI）、可热重载与自重载、撤销即净；**插件自身的提示词/工具/循环皆可自我优化**（改 → build → 重载闭环）。建新插件**优先克隆/借鉴/重构生态已有资源**（dsh-external 仓库、已注入插件、官方 packages 模式），不重复造轮子。
+
+### 一分钟起步（生产线三件套）
+
+```bash
+# 1. 生成骨架（toolkit / daemon-loop / ui-panel / hybrid）
+#    对 AI 说：dev_scaffold_plugin {"dir": "D:/dev/my-plugin", "name": "my-plugin", "form": "daemon-loop", "description": "..."}
+
+# 2. 构建打包（探测 DSH_CHECKOUT → tsc host → tsdown client（如声明）→ npm pack → tgz）
+#    对 AI 说：dev_build_plugin {"dir": "D:/dev/my-plugin"}
+
+# 3. 发布（gh release create v<version> + tgz）
+#    对 AI 说：dev_release_plugin {"dir": "D:/dev/my-plugin", "version": "0.1.0"}
+
+# 注入即活：dev_inject_plugin {"dir": "D:/dev/my-plugin"}
+# 改代码 → build → 自动 watch ~1.5s 重载（或 dev_reload_package）
+```
+
+### 30 行写一个"会思考的插件"（守护循环最小示例）
+
+```ts
+import type { Context } from 'cordis'
+import type LlmService from '@deepseek-ai/dsh-llm'
+import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+
+type AppContext = Context & { llm: LlmService; setInterval(fn: () => void, ms: number): any }
+
+export const name = 'my-daemon'
+export const inject = ['timer', 'llm']
+
+export function apply(ctx: AppContext): void {
+  let route: { provider: string; model: string } | null = null
+  ctx.on('llm/stream', (options, next) => { route = { provider: options.provider, model: options.model }; return next() })
+  ctx.setInterval(() => {
+    void (async () => {
+      if (!route) return
+      const stream = ctx.llm.stream({
+        provider: route.provider, model: route.model,
+        system: '判断是否需要人工介入，直接输出结论',
+        messages: [createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: '检查事项...' }] })],
+        reasoningEffort: ReasoningEffortId('off'), maxTokens: 200,
+      })
+      for await (const chunk of stream) { /* 决策 → 行动 */ }
+    })().catch(() => {})
+  }, 60_000)
+}
+```
+
+**规范铁律**（注入器实测沉淀）：
+1. **资源注册必须挂 `ctx.effect`**（工具/路由/监听）——热重载/卸载才能自动清理，否则僵尸残留（注入器自己踩过）
+2. **peerDependencies 用范围声明**（`>=0.0.1-rc <2`、`>=4.0.0-rc <5`）——不硬编码版本，DSH 升级不报废
+3. **client bundle 需单独构建**（tsdown → lib/client.js）——UI 形态两步构建
+4. **提示词注入遵守缓存原则**：静态文本 + order 靠前（静态到头）；动态内容走消息尾（动态到尾）；严禁动态拼接进 system——**system 前缀任何动态变化 = 整个会话缓存全量 miss**（命中便宜 10 倍）
+5. **自检**：改完代码跑一次 `dev_self_test`，确保注入/重载/自重载/预检/卸载全链路不退化
+6. **首轮锚定**（V4 Pro 实测，参考 [dsh-anchored-standard](https://github.com/xiaobright/dsh-anchored-standard)，Project2 98/99）：工具面大（≥5 个）时，首轮请求只暴露最核心的 1-2 个工具，首个 `tool/call` 后恢复全部——首轮请求结构决定整条会话的策略轨迹，锚定训练对齐的窄工具面再放开，能力不损。实现：`system-prompt/assemble` Waterfall 过滤器（骨架已自带，见 dev_scaffold_plugin）
+7. **工具 schema 精简**：description 用短句点明用途，详解放 tool result / 静态引导文本，不要写进 schema——工具目录按字符计费进首轮 prefill，实测 6 插件可膨胀到 17.6 万字符，稀释首轮注意力且无缓存 prefill 最贵（缓存命中便宜 10 倍）
+8. **近距离信号原则（最强机制，P14/P16/P20 实测）**：所有行为引导（分类/深度思考/收敛）必须注入在**用户消息之后**（近距离），同一指令放 system（远距离）会衰减甚至反向（P13 协议加速衰减、P20 深度段进 persona 路由崩到 67%）；固定文本保持缓存命中（92-94%）
+9. **弱域内路由（P8/P11）**：任务类型模糊时不要武断选模式——用弱 persona（模型自己分类），**按模型选 persona**（Pro=spec句+few-shot，Flash=neutral+classify，同一 persona 两模型行为可相反）
+10. **单任务长链路三锚（P22/P23）**：开放任务探索失控是主病（完成率 0%）——persona 静态锚「回顾已完成 + 信息足够就产出 + 禁止环境检查/穷举 grep」把完成率拉到 100%
+
+### 高性能插件（首轮锚定 · 为什么 & 怎么做）
+
+**为什么**：DeepSeek V4 Pro 的行为策略在首轮请求处被「完整 system prompt + 工具 schema 分布」强条件化。同题同环境：minimal（2 工具）99/96，standard（25 工具）91，两阶段锚定 98/99——先窄后宽，能力与完整工具面兼得。微探针证明起作用的是**可调用的 schema 面**（action space），不是看见工具名文本；工具目录只变化一次（首↔次请求之间有一次前缀缓存变化，首轮无缓存 prefill 最贵）。
+
+**怎么做（骨架自带，三步启用）**：
+1. `dev_scaffold_plugin` 生成的 toolkit 骨架 apply() 末尾有注释好的锚定块；
+2. `inject` 数组加 `'systemPrompt'`，把 `MINE` 换成你的工具名集合、`CORE` 换成首轮要保留的核心工具；
+3. 首次工具调用后自动恢复全部工具，resume/reload 不丢状态（阶段从持久 session events 推导）。
+
+**验证**：导出 session JSONL 看 `request/header`——第一份只含核心工具，首次工具调用后的下一份变更 header 含完整目录，此后保持。
+
+### 高性能引导的完整认知（v0.3.3 更新，基于 dsh-router-standard P1-P23 实测）
+
+| 机制 | 实测 | 落地 |
+|---|---|---|
+| 首轮锚定（窄工具面） | Project2 98/99 | tool-bootstrap 过滤器（骨架自带） |
+| **近距离引导**（用户消息后注入） | 零衰减（远距离同指令加速衰减） | 插件监听 session/event → inbox.append 固定引导 |
+| **弱域内路由**（模糊任务交模型自分类） | 区分度 +5~5.7，按模型选 persona | weak 模式（dev_router_mode weak） |
+| **deep-guide**（分类+深度思考+commit） | 路由 96% + 收敛 100% + 反稀释 | 近距离固定引导文本 |
+| **单任务三锚**（回顾+收敛+反跑题） | 完成率 0%→100% | persona 静态锚 |
+| plan-mode section 保留 | 失忆修复（v6） | applyPersona 只换 persona section |
+
+完整实现与复现探针：[dsh-router-standard](https://github.com/yjh051108/dsh-router-standard)（v0.1.0，含论文与 P1-P23 全数据）。
+
+**参考与致谢**：本引导中的「首轮锚定」机制与统计证据，参考了 **xiaobright** 的开源工作——
+[`dsh-anchored-standard`](https://github.com/xiaobright/dsh-anchored-standard)（MIT，
+两阶段锚定 preset 与 `tool-bootstrap.mjs` 实现，Project2 实测 98/99，首轮 2 工具 → 首次
+工具调用后恢复 25 项完整 Standard 工具）与
+[`modeltest`](https://github.com/xiaobright/modeltest)（V4.1b 评测套件：同环境对照
+minimal 99/96 vs standard 91 vs 两阶段 98/99、触发机制微探针、轨迹统计）。骨架中的锚定
+实现即该 preset 过滤器的插件级移植（只裁剪本插件工具）。
+
+## 典型工作流
+
+**装模组**：拿到插件包（package.json + lib/ 产物）→ 对 AI 说 `dev_inject_plugin`（参数 = 插件包绝对路径）→ 当场生效（下一 step 工具可见）。
+
+**开发迭代**：改代码 → build → 自动 watch 约 1.5 秒自动重载（或 `dev_reload_package`）→ 验证 → 稳定后 `dev_stage_promote` 一键转正。
+
+**卸载**：`dev_uninject_plugin`（参数 = 包名子串）→ 工具/监听/路由/client 表全清，免重启。
+
+## 机制
+
+1. **junction 链接**插件包到 `<当前 profile 目录>/node_modules`（loader 标准解析路径；目录取自 `ctx.get('profileContext').dir`，不再写死 `profiles/web`）；
+2. **`ctx.loader.create({ name, config })`** 运行时装配（完整 ctx）；
+3. **清单持久化**（`$DSH_HOME/super-injector/instances/<当前 profile>/registry.json`，**按 profile 隔离**），重启后自动恢复注入；
+4. **client 联动**：注入/重载后清除 entry disabled 标记并补扫 client 模块表（`client-modules.processOne`），浏览器端 bundle rev 联动更新。
+5. **操作串行锁**：所有注入/卸载/重载串行执行，等待上限 120s、单次运行上限 180s，超时审计后解冻，防永久卡死。
+
+## 踩坑记录
+
+- **插件包必须自带依赖链接**：`lib/` 里 `import '@deepseek-ai/dsh-tools'` 等从包自身 `node_modules` 解析——照 build.sh 建 junction 到 checkout 包（如 `node_modules/@deepseek-ai/dsh-tools → <checkout>/packages/core/tools`）；
+- **client bundle 需单独构建**：host 侧 `bash scripts/build.sh`（tsc），client 侧 `npm run build:client`（tsdown，产物 `lib/client.js`）——注入插件要出 UI 必须两步都构建；
+- **失败 import 会毒化重试**：loadCache 残留残缺 job 导致同名重载复用失败态——注入前 `purgeCache` 清理；
+- **资源注册必须挂 `ctx.effect`**：`reloadPackage` 重建失败若报 `duplicate / already registered`，说明资源是裸注册——挂 `ctx.effect` 后热重载才能正确清理重建；
+- **client 操作必须用完整包名**：`client-modules.processOne` 对 `entry.options.name` 精确匹配，传短名会静默注册失败；
+- 注入的插件不进 loader 配置持久化——重启后由注入器自动恢复（引导器常驻）。
+
+---
+
+**本仓库（自用修改版）**：https://github.com/wqzhellohhwy/dsh-super-injector-mod
+**上游仓库**：https://github.com/yjh051108/dsh-super-injector
+**上游 Release**：https://github.com/yjh051108/dsh-super-injector/releases
+
+> 本仓库为**自用修改版**（`@dsh-external/dsh-super-injector-mod`），基线 v0.3.3。
+> 改动清单见文首说明；上游的设计哲学、装配机制与防自毁逻辑均予保留。
+>
+> git remote 约定：`origin` = 本修改版仓库，`upstream` = 上游 `dsh-super-injector`。
