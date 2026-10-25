@@ -34,6 +34,7 @@ function resolveEsbuild() {
     join(ROOT, 'node_modules', 'esbuild', 'lib', 'main.js'),
     'C:/repository/dsh-projectless/node_modules/esbuild/lib/main.js',
     'C:/Users/53518/dsh-plugins/dsh-mcp-manager/node_modules/esbuild/lib/main.js',
+    'C:/Users/53518/dsh-plugins/历史插件归档/dsh-session-id-稳定版/node_modules/esbuild/lib/main.js',
   ]
   for (const c of cands) if (existsSync(c)) return c
   return null
@@ -59,6 +60,12 @@ const host = await build({
   external: ['node:*'],
   logLevel: 'warning',
   absWorkingDir: ROOT,
+  // 裸名 → 生态作用域包：本包无自带 node_modules，宿主只有 @deepseek-ai/* 的
+  // 作用域形态（npm 式布局），裸 `cordis` / `schemastery` 无法直接解析。
+  alias: {
+    cordis: 'C:/Users/53518/dsh-plugins/node_modules/@deepseek-ai/cordis/lib/index.js',
+    schemastery: 'C:/Users/53518/dsh-plugins/node_modules/@deepseek-ai/schemastery/lib/index.mjs',
+  },
 })
 if (host.errors.length) {
   console.error('HOST BUILD FAILED')

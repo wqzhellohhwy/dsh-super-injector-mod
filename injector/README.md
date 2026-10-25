@@ -4,7 +4,7 @@
 >
 > **基线**：上游 [yjh051108/dsh-super-injector](https://github.com/yjh051108/dsh-super-injector) **v0.3.3**
 > **包名**：`@dsh-external/dsh-super-injector-mod`（与上游 `@dsh-external/dsh-super-injector` **可并存**，不互相覆盖）
-> **版本**：`0.4.0-mod.1`
+> **版本**：`0.4.0-mod.4`
 >
 > 本修改版相对上游的改动：
 >
@@ -12,7 +12,6 @@
 > |---|---|
 > | **client 插件重载后模块图重组广播** | 上游重载带 client 的插件时只通知 bundle rev 变化（`rebuilt`），**假定渲染端能自愈**。实测会因 DSH 客户端「整包 bundle + slot 注册表」无模块级边界而导致模块图与 slot 注册错位（`renderSlot is not a function`），界面报废且只能重启恢复。本版在重载后调 `compose()` + `notifyGraphChanged()` **主动重组并广播模块图**，并确保目标行在表内（`processOne` 补注册） |
 > | **`dev_reload_package` 自伤护栏 + `force` 逃生门** | 重载关键基础设施（注入器自身 / `dsh-tool-manager`）前默认**拦截**并说明风险与替代路径；确需重载时传 `force: true` 放行。防止「重载过程中工具表被摘除重建、正在运行的会话失去工具而无法自救」 |
-> | **等待纪律（写入注入上下文）** | 明确约定 `job_output` / `wait_agent` 等阻塞等待**单次上限 30000ms**。分钟级等待（如 180s）会把「宿主已损坏」的窗口拉到极致，表现为「人还活着但没人应答」直到被强杀——即用户感知的「莫名暴毙」 |
 > | **改名后的自识别兼容** | `matchesSelf` 改为 `isSelfName`：按「去 `@scope/` 前缀后是否为自身名」判定，兼容 `dsh-super-injector` / `dsh-super-injector-mod` / 裸短名。原实现用 `includes('dsh-super-injector')`，改名后**短名会绕过防自毁检查**（实测捕获） |
 > | **构建方式** | 本机以 **esbuild** 重建产物（上游走 tsdown）。形态逐项对齐：ESM + 自包含（除 `node:` 外全部内联）、`minify: false`、`charset: utf8`（保留中文原文，避免被转义为 `\uXXXX`） |
 > | **0.4.0：剥离插件管理职责与自带 UI** | 删除 client 半侧（不再声明 `dsh.client`，渲染端不再加载本插件任何代码）与 `/super-injector/api` 四个无鉴权端点；删除 `dev_install_package`（装）；`dev_uninject_plugin` 瘦身为**纯运行时撤销**（不再写 profile patch）。装 / 卸 / 开关归官方 `dsh-plugin-manager`。详见 CHANGELOG |
@@ -49,8 +48,7 @@ DSH 生态的 **BepInEx 式模组注入入口**：运行时把任意本地插件
 
 ### 方式 A：Release 包（推荐，免构建）
 
-从 [Releases](https://github.com/yjh051108/dsh-super-injector/releases) 下载 tgz（上游版本），
-或直接使用本修改版的本地目录。解压/定位到插件目录（含 `lib/` 与 `cordis.patch.yml`），然后：
+从本仓库 Releases 下载 tgz，或直接使用本修改版的本地目录。解压/定位到插件目录（含 `lib/` 与 `cordis.patch.yml`），然后：
 
 ```bash
 # 官方装配（重启后由 bundles 接管，生产态）
@@ -68,11 +66,12 @@ dsh plugin --profile web add <插件目录>
 ### 方式 B：git 装配
 
 ```bash
-dsh plugin --profile web add github:yjh051108/dsh-super-injector   # 上游
+dsh plugin --profile web add <本修改版插件目录或 tgz>   # 本修改版
 ```
 
 > git 依赖拉取的是源码仓库（不含 `lib/`）；包内 `prepare` 钩子会在安装时自动
-> 用 tsdown 构建自包含 `lib/`（首次需要网络拉取 tsdown，之后走本地缓存）。
+> git 依赖拉取的是源码仓库（不含 `lib/`）；包内 `prepare` 钩子
+> （`node scripts/prepare.mjs`）会在安装时自动构建自包含 `lib/`。
 > 若构建失败，请改用方式 A 的 Release tgz（预构建产物）。
 
 ### 方式 C：引导装配（源码方式，只需一次）
@@ -101,12 +100,12 @@ dsh plugin --profile web add github:yjh051108/dsh-super-injector   # 上游
 ## 特性
 
 - 🔥 **热重载 + 自重载**：`dev_reload_package` 整包重载（清缓存 → 重新 import → 重建 fiber，失败回滚保留旧代）；注入器自身也支持自重载（自杀 → 全局定时器重建）
-- 🤖 **自动 watch**：注入即自动监听插件目录，改代码 build 后约 1.5 秒自动重载（无需手动触发）
+- 🤖 **自动 watch**：注入即自动监听插件目录，改代码 build 后约 1.5 秒自动重载（无需手动触发）。该 1.5s 为注入清单源默认间隔（`intervalMs`）；`config.watches` 配置源为 30 秒。**指纹变化先预检新代码可加载**，通过才重载，失败保持旧代码
 - 🖥️ **注入插件 UI 完整生效**：清除 loader 幽灵 entry 隔离（normalizeEntry），client 模块补扫/联动/卸载清理——注入的插件 host 工具 + 图谱/面板等 UI 全部可用
 - 🧪 **开发侧挂区（staging）+ 持久化**：测试工具挂"后侧"不进 tools schema、缓存零污染；`dev_stage_promote` 一键转正；staging 落盘，**自重载/重启后转正工具自动恢复**
-- 🧹 **一键卸载**：`dev_uninject_plugin` fiber 全清理（工具/监听/路由/client 表）→ 清注入清单 → 删 junction，免重启
+- 🧹 **一键卸载**：`dev_uninject_plugin` fiber 全清理（工具/监听/路由/client 表）→ 清注入清单 → 删 junction，免重启；`self: true` 可自举卸载注入器自身
 - 🛠️ **路由自愈**：`dev_clear_routes` 直捣 webserver 内部路由表，热重载残留的孤儿路由免重启清除
-- 🔁 **重启自动恢复**：注入清单持久化（`~/.dsh/super-injector/registry.json`），web 重启后自动归位
+- 🔁 **重启自动恢复**：注入清单持久化（`$DSH_HOME/super-injector/instances/<当前 profile>/registry.json`，**按 profile 隔离**），重启后自动归位
 - 📊 **操作自检**：每次注入/重载/撤销返回 `host ✓ / client ✓` 双验证（client 指**被注入插件**的 UI 状态）；`dev_plugin_status` 含操作成功率统计
 - 🛡️ **失败可重试**：`hasActiveEntry` 权威防重 + 失败残留缓存自动清理 + 残留 entry 自动清理
 
@@ -147,19 +146,47 @@ dsh plugin --profile web add github:yjh051108/dsh-super-injector   # 上游
 
 ## 工具全家桶（全部免重启）
 
+共 **18 个 `dev_*` 工具**（运行时 `dev_plugin_status` 实测口径）。分四域：
+
+### 注入核心（6）
+
 | 工具 | 说明 |
 |---|---|
 | `dev_inject_plugin` | 运行时注入本地插件包（junction 链接 + loader.create，`hasActiveEntry` 防重） |
-| `dev_uninject_plugin` | 运行时撤销注入模组（fiber dispose 全清理 + 清注入清单 + 删 junction；**不改 profile 配置**） |
+| `dev_uninject_plugin` | 运行时撤销注入模组（fiber dispose 全清理 + 清注入清单 + 删 junction；**不改 profile 配置**）。`self: true` 为自举卸载（仅对注入器自身） |
 | `dev_injected_list` | 列出注入清单 |
-| `dev_reload_package` | 整包热重载（清缓存 → 重新 import → 重建 fiber，失败回滚保留旧代；含自重载） |
+| `dev_reload_package` | 整包热重载（清缓存 → 重新 import → 重建 fiber，失败回滚保留旧代；含自重载）。重载关键基础设施前默认拦截，`force: true` 放行 |
+| `dev_reload_preset` | 预设热更新（给 `.agent-presets/<preset>/agent.cordis.yml` 的相对 `.mjs` 引用加 `?v=N`，绕 ESM 缓存；已运行会话保持旧代） |
 | `dev_plugin_status` | 已装配插件清单、fiber 状态与操作成功率统计 |
+
+### 自愈修复（3）
+
+| 工具 | 说明 |
+|---|---|
 | `dev_clear_routes` | webserver 路由残留自愈（按 path 前缀删除孤儿路由） |
+| `dev_heal_links` | profile `link:` 依赖 junction 自愈（扫描悬空/缺失链接并重建，免重启） |
+| `dev_fix_patch` | profile patch 修复（`cordis.patch.yml` 按 entry id 去重，治 `duplicate loader entry id` 启动崩溃；备份原文件） |
+
+### 开发侧挂区（5）
+
+| 工具 | 说明 |
+|---|---|
 | `dev_stage_add` | 开发侧挂：测试工具挂后侧（不进 tools schema，缓存零污染） |
 | `dev_stage_call` | 调用侧挂工具测试 |
 | `dev_stage_list` | 列出侧挂工具（含转正状态） |
 | `dev_stage_promote` | 一键转正：侧挂工具挂前侧正式注册（唯一一次缓存刷新） |
 | `dev_stage_demote` | 撤回/注销侧挂或已转正工具 |
+
+### 插件生产线 + 自检（4）
+
+| 工具 | 说明 |
+|---|---|
+| `dev_scaffold_plugin` | 生成四种形态骨架（toolkit / daemon-loop / ui-panel / hybrid）——package.json + tsconfig + build.sh + 形态源码 |
+| `dev_build_plugin` | 构建并打包（探测 DSH_CHECKOUT → `bash scripts/build.sh` → tsc 编译 host → 有 `build:client` 则 tsdown 编译 UI → `npm pack` 出 tgz） |
+| `dev_release_plugin` | 发布 GitHub Release（`gh release create v<version> <tgz>`，tag + 附件 + notes 模板）。依赖 gh CLI 已认证 + git remote 就位 |
+| `dev_self_test` | 全链路故障演练（注入假插件 → 热重载 → 自重载节流拒绝 → 预检拦截 → 卸载即净）；项数随环境浮动，约 5-8 项 |
+
+> **生态分流**：装 / 卸 / 开关成品插件走官方 `dsh-plugin-manager`；临时 profile 隔离实验走 `dsh-profile-lab`。本包的注入是**开发态运行时通道**。
 
 ## 插件开发指南（生产线）
 
@@ -265,10 +292,11 @@ minimal 99/96 vs standard 91 vs 两阶段 98/99、触发机制微探针、轨迹
 
 ## 机制
 
-1. **junction 链接**插件包到 `~/.dsh/profiles/web/node_modules`（loader 标准解析路径）；
+1. **junction 链接**插件包到 `<当前 profile 目录>/node_modules`（loader 标准解析路径；目录取自 `ctx.get('profileContext').dir`，不再写死 `profiles/web`）；
 2. **`ctx.loader.create({ name, config })`** 运行时装配（完整 ctx）；
-3. **清单持久化**（`~/.dsh/super-injector/registry.json`），重启后自动恢复注入；
+3. **清单持久化**（`$DSH_HOME/super-injector/instances/<当前 profile>/registry.json`，**按 profile 隔离**），重启后自动恢复注入；
 4. **client 联动**：注入/重载后清除 entry disabled 标记并补扫 client 模块表（`client-modules.processOne`），浏览器端 bundle rev 联动更新。
+5. **操作串行锁**：所有注入/卸载/重载串行执行，等待上限 120s、单次运行上限 180s，超时审计后解冻，防永久卡死。
 
 ## 踩坑记录
 

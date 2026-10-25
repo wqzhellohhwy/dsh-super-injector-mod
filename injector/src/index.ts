@@ -32,6 +32,8 @@ import { join, relative, dirname, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { pathToFileURL, fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
+import { randomBytes } from 'node:crypto'
 
 // ═══════════════════════════════════════════════════════════════════════
 // A: 插件生产线模板（dev_scaffold_plugin）——四种形态骨架：
@@ -492,7 +494,7 @@ type AppContext = Context & {
 }
 
 export const name = 'dsh-super-injector-mod'
-export const inject = ['loader', 'timer', 'tools', 'systemPrompt', 'webServer']
+export const inject = ['loader', 'timer', 'tools', 'systemPrompt']
 
 export interface Config {
   /** 注入清单文件路径（缺省 $DSH_HOME/super-injector/instances/<当前 profile>/registry.json）。 */
@@ -628,19 +630,43 @@ export function apply(ctx: AppContext, config: Config): void {
   /** 清除某包目录的模块缓存残留（失败 import 留下的残缺 job 会毒化重试）。 */
   function purgeCache(pkgDir: string): void {
     const loadCache = ctx.loader.internal?.loadCache as Map<string, unknown> | undefined
-    if (!loadCache || typeof loadCache.delete !== 'function') return
+    if (!loadCache || typeof loadCache.delete !== 'function') {
+      purgeCjsCache(pkgDir)
+      return
+    }
     const key = pkgDir.replace(/\\/g, '/')
     for (const u of [...loadCache.keys()]) {
       // URL 是百分号编码的（非 ASCII 目录），先解码再匹配
       const uDecoded = decodeURIComponent(u)
       if (uDecoded.includes(key)) Map.prototype.delete.call(loadCache, u)
     }
+    // ② CJS 半边：Node 下经 import() 加载的 CJS 模块同时进 loadCache 与
+    // require.cache，只清前者会让重 import 拿回旧模块（实测 SENTINEL 仍旧）。
+    purgeCjsCache(pkgDir)
+  }
+
+  /**
+   * 清 pkgDir 下 CJS 模块的 `require.cache` 条目（双缓存清理的第二半）。
+   * @returns 实际删除的条目数（纯 ESM 宿主下恒为 0，不报错）
+   */
+  function purgeCjsCache(pkgDir: string): number {
+    let cleared = 0
+    try {
+      const cache = (createRequire(import.meta.url) as { cache?: Record<string, unknown> }).cache
+      if (!cache || typeof cache !== 'object') return 0
+      const key = pkgDir.replace(/\\/g, '/').toLowerCase()
+      for (const id of Object.keys(cache)) {
+        if (!id.replace(/\\/g, '/').toLowerCase().includes(key)) continue
+        if (Reflect.deleteProperty(cache, id)) cleared++
+      }
+    } catch { /* require.cache 不可用（纯 ESM 宿主）不阻塞重载 */ }
+    return cleared
   }
 
   // ============ 热重载核心 ============
   /** 按包名匹配清理 webserver 路由残留（强制登记守卫的自愈部分）。 */
   function clearRoutesByMatch(match: string): string[] {
-    const hs = ctx.webServer
+    const hs = ctx.get('webServer') as any
     const cleaned: string[] = []
     for (const tableName of ['exact', 'prefixes', 'upgrades'] as const) {
       const table = hs?.[tableName]
@@ -873,6 +899,10 @@ export function apply(ctx: AppContext, config: Config): void {
     const loadCache = internal.loadCache as Map<string, any>
 
     const urlKey = (urlMatch ?? match).replace(/\\/g, '/')
+    // 双缓存清理（CJS 半边）：整包重载若只清 ESM loadCache，经 import() 加载过的
+    // CJS 依赖仍留在 require.cache → 重 import 拿回旧模块（实测 SENTINEL 仍旧）。
+    // urlKey 是目录路径或包名，两者都是 CJS 缓存 absolute path 的子串。
+    try { purgeCjsCache(urlKey) } catch { /* 清 CJS 缓存失败不阻塞重载 */ }
     let urls = [...loadCache.keys()].filter((u) => {
       if (typeof u !== 'string') return false
       return decodeURIComponent(u).includes(urlKey)
@@ -1017,6 +1047,14 @@ export function apply(ctx: AppContext, config: Config): void {
       try {
         for (const u of urls) Map.prototype.delete.call(loadCache, u)
       } catch { /* 清理失败不阻塞 */ }
+      // 自重载额外补一次：注入器自身入口是 ESM，但依赖链可能夹带 CJS，且
+      // reborn 走 tree.import(包名) 的解析路径可能与 entry URL 不同——按自身
+      // 包目录兜底清一遍 CJS 缓存（双缓存清理的第二半）。
+      try {
+        const selfPkgDir = dirname(dirname(fileURLToPath(import.meta.url)))
+        const cjsCleared = purgeCjsCache(selfPkgDir)
+        auditLog('self-reload-cjs-purge', `CJS 缓存清理 ${cjsCleared} 条（${selfPkgDir}）`)
+      } catch { /* 自身目录解析失败不阻塞自重载 */ }
       // ═══ 稳定性增强②：看门狗 ═══
       // 自杀后 5 秒检查重建是否完成；若 reboot 挂起（import 永不 resolve/
       // reject 的异步堵塞）→ catch 不会触发 → 注入器永久缺席。看门狗主动
@@ -2543,7 +2581,7 @@ export function apply(ctx: AppContext, config: Config): void {
       render: (_args: unknown, value: unknown) => [{ type: 'text', text: String(value) }],
     },
     async execute(args: { prefix: string }) {
-      const hs = ctx.webServer
+      const hs = ctx.get('webServer') as any
       const out: string[] = []
       for (const tableName of ['exact', 'prefixes', 'upgrades'] as const) {
         const table = hs?.[tableName]
@@ -3196,6 +3234,107 @@ export function apply(ctx: AppContext, config: Config): void {
     })
   } catch (e) {
     logger.warn('[super-injector] systemPrompt.context 重复注册容忍（跳过，新实例继续运行）: %s', e instanceof Error ? e.message : String(e))
+  }
+
+  // ============ 跨实例 API（/super-injector/api）============
+  // dev_* 工具全是进程内的（ctx.loader / ctx.tools），管不到别的进程；跨实例
+  // 「主动命令」只能走 HTTP。per-instance token 落在 registry 同目录，缺失或
+  // 错误一律 401（webServer 只绑回环）。
+  const crossTokenFile = join(dirname(registryFile), 'cross-instance-token.txt')
+
+  function ensureCrossToken(): string {
+    try {
+      const cur = readFileSync(crossTokenFile, 'utf8').trim()
+      if (cur.length >= 16) return cur
+    } catch { /* 不存在 → 生成 */ }
+    const tok = randomBytes(16).toString('hex')
+    try {
+      mkdirSync(dirname(crossTokenFile), { recursive: true })
+      writeFileSync(crossTokenFile, tok + '\n', 'utf8')
+    } catch (e) {
+      logger.warn('[super-injector] 跨实例 token 落盘失败（本次运行仅内存有效）: %s', String(e))
+    }
+    return tok
+  }
+
+  const crossToken = ensureCrossToken()
+
+  function readJsonBody(req: any): Promise<Record<string, unknown>> {
+    return new Promise((done) => {
+      const chunks: Buffer[] = []
+      let size = 0
+      req.on('data', (c: Buffer) => {
+        size += c.length
+        if (size > 1_000_000) { try { req.destroy() } catch { /* ignore */ } return }
+        chunks.push(c)
+      })
+      req.on('end', () => {
+        try { done(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}) } catch { done({}) }
+      })
+      req.on('error', () => done({}))
+    })
+  }
+
+  async function crossApiHandler(req: any, res: any): Promise<void> {
+    const send = (code: number, obj: unknown): void => {
+      try {
+        res.writeHead(code, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify(obj))
+      } catch { /* 连接已断 */ }
+    }
+    try {
+      const u = new URL(String(req.url ?? '/'), 'http://127.0.0.1')
+      const action = u.pathname.replace(/^\/super-injector\/api\/?/, '').replace(/\/$/, '')
+      const body = (req.method === 'POST' ? await readJsonBody(req) : {}) as Record<string, any>
+      const token = String(u.searchParams.get('token') ?? body.token ?? '')
+      if (token !== crossToken) {
+        send(401, { ok: false, error: 'unauthorized（读本实例 token 文件）', tokenFile: crossTokenFile })
+        return
+      }
+      if (action === '' || action === 'status') {
+        send(200, { ok: true, pid: process.pid, profile: profileName, injected: readRegistry(), tokenFile: crossTokenFile })
+        return
+      }
+      if (req.method !== 'POST') { send(405, { ok: false, error: 'method not allowed（除 status 外均需 POST）' }); return }
+      if (action === 'reload') {
+        const match = String(body.match ?? '')
+        if (!match) { send(400, { ok: false, error: 'match 必填' }); return }
+        const out = await withOpLock(() => reloadPackage(match, body.urlMatch ? String(body.urlMatch) : undefined))
+        send(200, { ok: out.startsWith('OK'), result: out })
+        return
+      }
+      if (action === 'inject') {
+        const dir = String(body.dir ?? '')
+        if (!dir) { send(400, { ok: false, error: 'dir 必填' }); return }
+        const out = await withOpLock(() => inject(dir))
+        send(200, { ok: out.startsWith('OK'), result: out })
+        return
+      }
+      if (action === 'uninject') {
+        const match = String(body.match ?? '')
+        if (!match) { send(400, { ok: false, error: 'match 必填' }); return }
+        const out = await withOpLock(() => uninject(match, Boolean(body.self)))
+        send(200, { ok: out.startsWith('OK'), result: out })
+        return
+      }
+      send(404, { ok: false, error: 'unknown action: ' + action })
+    } catch (e) {
+      send(500, { ok: false, error: String(e).slice(0, 300) })
+    }
+  }
+
+  // 惰性挂载：webServer 不写进顶层 inject（headless/tui 没有 HTTP 服务时主 fiber
+  // 不 pending），改挂**子 fiber** —— 依赖齐备才激活，缺了就整块跳过。
+  // ⚠️ 整段包 try：本插件 apply 抛错 = 注入器整体死亡，路由挂不上不值得它陪葬。
+  try {
+    ctx.inject(['webServer'], (sub: any) => {
+      const hs = sub?.webServer ?? sub?.get?.('webServer')
+      if (!hs || typeof hs.register !== 'function') return
+      sub.effect(() => hs.register({ kind: 'prefix', path: '/super-injector/api', handler: crossApiHandler }),
+        'super-injector: cross-instance api')
+    })
+  } catch (e) {
+    logger.warn('[super-injector] 跨实例 API 挂载失败（其余能力不受影响）: %s', e instanceof Error ? e.message : String(e))
   }
 
   logger.info('[super-injector] 就绪：watch %d 目录（%dms），autoRestore=%s', watches.length, intervalMs, String(config.autoRestore))
