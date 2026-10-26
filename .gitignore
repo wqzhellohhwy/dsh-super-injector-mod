@@ -2,3 +2,9 @@ node_modules/
 lib/
 *.tsbuildinfo
 *.tgz
+# 备份/临时（2026-10-25 补）
+.tmp/
+*.TMP
+*.bak
+*.bak-*
+*.BROKEN*

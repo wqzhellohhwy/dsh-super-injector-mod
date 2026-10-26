@@ -1,4 +1,57 @@
-# dsh-super-injector 安装手册
+# dsh-super-injector-mod 安装手册
+
+> ## ⚠️ 先读这段：本仓库是**修改版**，包名与上游不同
+>
+> 下面的正文（第 1–8 节）是**上游 `@dsh-external/dsh-super-injector-mod` 的原文**——其中的包名、
+> entry id、仓库链接、tgz 文件名**全部指上游原版**。照抄会装成上游，**不是本修改版**。
+>
+> | | 上游原版 | **本仓库（修改版）** |
+> |---|---|---|
+> | 包名 | `@dsh-external/dsh-super-injector` | **`@dsh-external/dsh-super-injector-mod`** |
+> | entry id | `dsh-super-injector` | **`dsh-super-injector-mod`** |
+> | 仓库 | `yjh051108/dsh-super-injector` | `wqzhellohhwy/dsh-super-injector-mod` |
+> | 自带 UI | 有（client 半侧） | **已删除**（0.4.0-mod.1 起，渲染端不再加载本包任何代码） |
+>
+> 两者**包名不同、可并存**，互不覆盖（但 entry id 也不能撞，见 README 的说明）。
+>
+> ---
+>
+> ### 装本修改版的正确姿势
+>
+> 本包是**本地 link 安装**（`private: true`，不发布 npm），装法就是「建 junction + 写 profile 配置」：
+>
+> ```powershell
+> $pkg     = '<本仓库路径>\injector'      # 含 package.json 的那个目录
+> $profile = '<目标 profile>'              # web / backup / desktop / ...
+> $profDir = "$env:USERPROFILE\.dsh\profiles\$profile"
+> $linkDir = "$profDir\node_modules\@dsh-external\dsh-super-injector-mod"
+>
+> # 1) junction：把包挂进该 profile 的 node_modules
+> New-Item -ItemType Directory -Path (Split-Path -Parent $linkDir) -Force | Out-Null
+> New-Item -ItemType Junction -Path $linkDir -Target $pkg | Out-Null
+> ```
+>
+> 2) 写该 profile 的 `package.json`，两处：
+> `dependencies` 加 `"@dsh-external/dsh-super-injector-mod": "link:<本仓库路径>/injector"`，
+> `dsh.profile.bundles` 加 `"@dsh-external/dsh-super-injector-mod"`。
+>
+> **不需要**再配 `profileNodeModules` / `registryFile` —— 0.4.0-mod.2 起本包会自动按
+> **当前实例自己的 profile** 定位（读 dsh 的 `profileContext` 服务）。
+>
+> ⚠️ **desktop profile 不能用 CLI 装**：`dsh plugin --profile desktop ...` 会被
+> `profile "desktop" is managed exclusively by the Electron application` 拒绝，
+> 请改用 GUI 的插件管理页。
+>
+> 装完重启该实例，向 agent 说一句 `dev_plugin_status`，看到 `dsh-super-injector-mod`
+> 且状态 active 即成功。
+>
+> 💡 装完重启该实例，向 agent 说一句 `dev_plugin_status`，看到 `dsh-super-injector-mod`
+> 且状态 active 即成功。
+> **但 desktop 仍须走 GUI 插件页**——Electron 独占管理，命令行装不了也重启不了。
+
+---
+
+> 以下正文为**本修改版的安装步骤**（包名 / entry id / 路径均已按本修改版校正）。
 
 > 给第一次接触的人/agent 看。三种方式任选其一，**推荐方式 A**。
 > 装完用第 5 节验证，装不上看第 6 节排查，想卸载看第 7 节。
@@ -13,7 +66,7 @@
 
 dsh-super-injector 是 DSH 的**插件注入器**：装好它之后，任意本地插件包都能**免重启**注入运行中的 DSH（`dev_inject_plugin` 一句话的事），还自带热重载、自重载、卸载即净、一键自检。
 
-它本身也是一个标准 DSH 插件（`@yjh051108/dsh-super-injector`），所以安装它 = 走 DSH 官方装配路径一次，之后万物皆可注入。
+它本身也是一个标准 DSH 插件（`@dsh-external/dsh-super-injector-mod`），所以安装它 = 走 DSH 官方装配路径一次，之后万物皆可注入。
 
 ---
 
@@ -21,7 +74,7 @@ dsh-super-injector 是 DSH 的**插件注入器**：装好它之后，任意本�
 
 ### 第 1 步：下载
 
-从 [Releases](https://github.com/yjh051108/dsh-super-injector/releases) 下载最新版：
+从 [Releases](本仓库 Releases) 下载最新版：
 
 ```
 dsh-external-dsh-super-injector-<版本>.tgz
@@ -56,7 +109,7 @@ dsh plugin --profile web add ~/dsh-super-injector
 ## 3. 方式 B：git 装配
 
 ```bash
-dsh plugin --profile web add github:yjh051108/dsh-super-injector
+dsh plugin --profile web add <本修改版插件目录或 tgz>
 ```
 
 重启 web 后同上验证。（git 安装只取源码，需要本机有构建环境：bash + node + npm + DSH checkout 或 `DSH_CHECKOUT` 环境变量。）
@@ -72,8 +125,8 @@ dsh plugin --profile web add github:yjh051108/dsh-super-injector
 # a top-level YAML array of loader patch entries (id-targeted config
 # overrides, disables, and insert lists; !!js expressions allowed).
 
-- id: dsh-super-injector
-  name: '@yjh051108/dsh-super-injector'
+- id: dsh-super-injector-mod
+  name: '@dsh-external/dsh-super-injector-mod'
   config: {}
 ```
 
@@ -89,11 +142,11 @@ mkdir -p ~/.dsh/profiles/web/node_modules/@dsh-external
 
 ```bash
 # Windows（junction，无需管理员；用 Git Bash 执行）
-ln -s /你的路径/dsh-super-injector ~/.dsh/profiles/web/node_modules/@yjh051108/dsh-super-injector
+ln -s /你的路径/dsh-super-injector ~/.dsh/profiles/web/node_modules/@dsh-external/dsh-super-injector-mod
 # 或 cmd（Windows 原生）
 mklink /J "%USERPROFILE%\.dsh\profiles\web\node_modules\@dsh-external\dsh-super-injector" "D:\你的路径\dsh-super-injector"
 # Linux/macOS（软链）
-ln -s /你的路径/dsh-super-injector ~/.dsh/profiles/web/node_modules/@yjh051108/dsh-super-injector
+ln -s /你的路径/dsh-super-injector ~/.dsh/profiles/web/node_modules/@dsh-external/dsh-super-injector-mod
 ```
 
 > ⚠️ `cordis.patch.yml` 必须是**单一顶层值**（要么 `[]`，要么 `- id:` 列表，不能两者混存——否则 YAML 解析报错）。
@@ -150,20 +203,21 @@ dev_fix_patch --check  # 只检查
 
 ---
 
-## 5. 验证是否装好
+## 6. 验证是否装好
 
 装好后对 agent 说（或自己跑）：
 
 ```text
-dev_plugin_status     → 看到 dsh-super-injector active，且操作统计面板正常
-dev_self_test         → 一键回归 8 项，期望全部 PASS（含注入/热重载/自重载节流/预检拦截/卸载）
+dev_plugin_status     → 看到 dsh-super-injector-mod active，且操作统计面板正常
+dev_self_test         → 全链路回归，期望全部 PASS（含注入/热重载/自重载节流/预检拦截/卸载）
 ```
 
-`dev_self_test` 全部 PASS = 注入器及其环境完全健康。
+`dev_self_test` 全部 PASS = 注入器及其环境完全健康。项数随环境浮动（约 5-8 项），
+具体项数取决于 `detectCheckout` / `findBash` 等前置探测是否成功（失败会提前汇总）。
 
 ---
 
-## 6. 常见问题排查
+## 7. 常见问题排查
 
 | 症状 | 原因与解法 |
 |---|---|
@@ -179,32 +233,33 @@ dev_self_test         → 一键回归 8 项，期望全部 PASS（含注入/热
 
 ---
 
-## 7. 卸载 / 回滚
+## 8. 卸载 / 回滚
 
 ```bash
 # 1. 从 profile bundles 移除（官方路径）
-dsh plugin --profile web remove @yjh051108/dsh-super-injector
+dsh plugin --profile web remove @dsh-external/dsh-super-injector-mod
 
 # 2. 清理 profile patch 里的 disabled/配置条目（若存在）
-#    编辑 ~/.dsh/profiles/web/cordis.patch.yml，删除含 dsh-super-injector 的条目，
+#    编辑 ~/.dsh/profiles/web/cordis.patch.yml，删除含 dsh-super-injector-mod 的条目，
 #    保持文件为单一顶层值（[] 或列表）
 
 # 3. 删除 node_modules 链接（若存在）
-rm -rf ~/.dsh/profiles/web/node_modules/@yjh051108/dsh-super-injector
+rm -rf ~/.dsh/profiles/web/node_modules/@dsh-external/dsh-super-injector-mod
 
 # 4. 清理运行时注入清单（若走的是运行时注入）
-#    重启后由 agent 执行 dev_uninject_plugin，或直接删除 ~/.dsh/super-injector/registry.json
+#    重启后由 agent 执行 dev_uninject_plugin，或直接删除
+#    $DSH_HOME/super-injector/instances/<当前 profile>/registry.json
 ```
 
-重启 web 后 `dev_*` 工具消失即卸载完成。若只是临时禁用：在 patch 里给 `dsh-super-injector` 加 `disabled: true` 即可（保留数据，随时恢复）。
+重启 web 后 `dev_*` 工具消失即卸载完成。若只是临时禁用：在 patch 里给 `dsh-super-injector-mod` 加 `disabled: true` 即可（保留数据，随时恢复）。
 
 ---
 
-## 8. 给 agent 的一句话
+## 9. 给 agent 的一句话
 
-> 本环境装有 dsh-super-injector（dev_* 工具）：任意本地插件包可运行时注入——工具包/守护循环（timer+LLM 自主 agent loop）/UI 面板/混合形态，同一通道；注入即完整生效（host+UI）、可热重载与自重载、卸载即净。插件自身的提示词/工具/循环皆可自我优化；建新插件优先克隆/借鉴/重构生态已有资源，不重复造轮子。若注入器无法支撑此闭环，优先修复注入器。从零体验路径：dev_plugin_status → dev_self_test → dev_scaffold_plugin → dev_build_plugin → dev_inject_plugin → dev_uninject_plugin。
+> 本环境装有 dsh-super-injector-mod（dev_* 工具）：任意本地插件包可运行时注入——工具包/守护循环（timer+LLM 自主 agent loop）/UI 面板/混合形态，同一通道；注入即完整生效（host 工具立刻可用，被注入插件**自己**带的 client UI 也会被联动补扫生效——本插件自身已不带 UI）、可热重载与自重载、运行时撤销即净。插件自身的提示词/工具/循环皆可自我优化；建新插件优先克隆/借鉴/重构生态已有资源，不重复造轮子。若注入器无法支撑此闭环，优先修复注入器。从零体验路径：dev_plugin_status → dev_self_test → dev_scaffold_plugin → dev_build_plugin → dev_inject_plugin → dev_uninject_plugin。
 
 ---
 
-**仓库**：https://github.com/yjh051108/dsh-super-injector
-**Releases**：https://github.com/yjh051108/dsh-super-injector/releases
+**仓库**：本仓库
+**Releases**：本仓库 Releases

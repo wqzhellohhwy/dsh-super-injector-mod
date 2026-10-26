@@ -1,7 +1,7 @@
 {
-  "name": "@dsh-external/dsh-super-injector",
-  "version": "0.3.3",
-  "description": "超级模组注入器：运行时注入任意本地 DSH 插件包（junction 链接 + loader.create，不碰 patch/package.json/不重启），热重载全家桶 + 开发侧挂区一键转正 + 一键卸载 + 路由自愈 + 插件管理 UI（设置页：列表/卸载/拖入内化），清单持久化重启自动恢复——DSH 生态的 BepInEx 式模组注入入口",
+  "name": "@dsh-external/dsh-super-injector-mod-mod",
+  "version": "0.4.0-mod.8",
+  "description": "超级模组注入器（自用修改版，基于上游 yjh051108/dsh-super-injector v0.3.3）：运行时注入任意本地 DSH 插件包（junction 链接 + loader.create，不碰 patch/package.json、不重启），热重载全家桶 + 开发侧挂区一键转正 + 路由自愈 + 插件生产线（脚手架/构建/发布/自检），清单持久化**按当前 profile 隔离**、重启自动恢复——DSH 生态的 BepInEx 式模组注入入口。【2026-10-12 0.4.0-mod.1】移除插件管理职责与自带 UI：装卸/开关交给官方 dsh-plugin-manager，本包不再声明 dsh.client、不再注册 webServer API，只保留运行时注入这一官方留白。【2026-10-12 0.4.0-mod.2】profile 感知修复：junction 目标与注入清单默认按**当前实例自己的 profile** 定位（读 dsh 提供的 profileContext 服务），不再写死 profiles/web，多个 profile 共用 $DSH_HOME 也不再互相串清单。【2026-10-17 0.4.0-mod.4】webServer 改为惰性获取：headless/tui 实例不再整插件 pending，dev_* 全部可用。本修改版新增：client 插件重载后模块图重组广播（根治 slot 错位界面报废）、dev_reload_package 自伤护栏 + force 逃生门。",
   "private": true,
   "type": "module",
   "main": "./lib/index.js",
@@ -11,29 +11,19 @@
       "types": "./lib/types/index.d.ts",
       "default": "./lib/index.js"
     },
-    "./client": {
-      "types": "./lib/types/client/index.d.ts",
-      "default": "./lib/client.js"
-    },
     "./package.json": "./package.json"
   },
   "files": [
     "lib",
     "cordis.patch.yml",
     "scripts/build.sh",
-    "scripts/fix-patch.mjs"
+    "scripts/fix-patch.mjs",
+    "scripts/prepare.mjs"
   ],
   "license": "BSD-3-Clause",
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
-    },
-    "client": {
-      "inject": [
-        "@deepseek-ai/dsh-client-runtime",
-        "@deepseek-ai/dsh-client-ui-slots"
-      ],
-      "platform": "web"
     }
   },
   "peerDependencies": {
@@ -43,12 +33,12 @@
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
-    "tsdown": "^0.22.14",
     "typescript": "^5.9.3"
   },
   "scripts": {
     "build": "bash scripts/build.sh",
-    "build:client": "tsdown",
+    "prepare": "node scripts/prepare.mjs",
+    "build:esbuild": "node scripts/build-esbuild.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   }
 }
